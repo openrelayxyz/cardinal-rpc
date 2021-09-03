@@ -127,7 +127,7 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
       argVals = append(argVals, reflect.Zero(argType))
       continue
     }
-    arg := reflect.New(t)
+    arg := reflect.New(argType)
     if err := json.Unmarshal(args[i], arg.Interface()); err != nil {
       return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error())), cm
     }

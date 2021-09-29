@@ -15,7 +15,7 @@ require (
 	github.com/leodido/go-urn v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.5-0.20180830101745-3fb116b82035 // indirect
-	github.com/openrelayxyz/cardinal-types v0.0.1
+	github.com/openrelayxyz/cardinal-types v0.0.2
 	github.com/rs/cors v1.7.0
 	github.com/stretchr/testify v1.4.0 // indirect
 	github.com/ugorji/go v1.1.7 // indirect

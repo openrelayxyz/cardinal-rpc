@@ -15,7 +15,7 @@ require (
 	github.com/leodido/go-urn v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.5-0.20180830101745-3fb116b82035 // indirect
-	github.com/openrelayxyz/cardinal-types v0.0.0-00010101000000-000000000000
+	github.com/openrelayxyz/cardinal-types v0.0.1
 	github.com/rs/cors v1.7.0
 	github.com/stretchr/testify v1.4.0 // indirect
 	github.com/ugorji/go v1.1.7 // indirect
@@ -23,5 +23,3 @@ require (
 	gopkg.in/go-playground/assert.v1 v1.2.1 // indirect
 	gopkg.in/go-playground/validator.v9 v9.29.1 // indirect
 )
-
-replace github.com/openrelayxyz/cardinal-types => /home/aroberts/Projects/gopath/src/github.com/openrelayxyz/cardinal-types

@@ -43,7 +43,7 @@ type CallMetadata struct{
 var (
   contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
   errorType = reflect.TypeOf((*error)(nil)).Elem()
-  metaType = reflect.TypeOf((*CallMetadata)(nil)).Elem()
+  metaType = reflect.TypeOf((*CallMetadata)(nil))
 )
 
 func (reg *registry) Register(namespace string, service interface{}) {

@@ -27,11 +27,12 @@ type registry struct{
 }
 
 type callback struct{
-  fn           reflect.Value
-  takesContext bool
-  errIndex     int
-  metaIndex    int
-  argTypes     []reflect.Type
+  fn               reflect.Value
+  takesContext     bool
+  takesCallContext bool
+  errIndex         int
+  metaIndex        int
+  argTypes         []reflect.Type
 }
 
 type CallMetadata struct{
@@ -40,10 +41,40 @@ type CallMetadata struct{
   Duration time.Duration
 }
 
+func (cm *CallMetadata) AddCompute(x uint64) {
+  if cm.Compute == nil {
+    cm.Compute = new(big.Int).SetUint64(x)
+  } else {
+    cm.Compute.Add(cm.Compute, new(big.Int).SetUint64(x))
+  }
+}
+
+func (cm *CallMetadata) AddBigCompute(x *big.Int) {
+  if cm.Compute == nil {
+    cm.Compute = new(big.Int).Set(x)
+  } else {
+    cm.Compute.Add(cm.Compute, x)
+  }
+}
+
+type CallContext struct {
+  ctx context.Context
+  meta *CallMetadata
+}
+
+func (c *CallContext) Context() context.Context {
+  return c.ctx
+}
+
+func (c *CallContext) Metadata() *CallMetadata {
+  return c.meta
+}
+
 var (
   contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
   errorType = reflect.TypeOf((*error)(nil)).Elem()
   metaType = reflect.TypeOf((*CallMetadata)(nil))
+  callContextType = reflect.TypeOf((*CallContext)(nil))
 )
 
 func (reg *registry) Register(namespace string, service interface{}) {
@@ -54,6 +85,7 @@ func (reg *registry) Register(namespace string, service interface{}) {
     methVal := receiver.Method(i)
     methType := methVal.Type()
     takesContext := false
+    takesCallContext := false
     errIndex := -1
     metaIndex := -1
     argTypes := []reflect.Type{}
@@ -61,6 +93,8 @@ func (reg *registry) Register(namespace string, service interface{}) {
     for j := 0; j < methType.NumIn(); j++ {
       if inType := methType.In(j); j == 0 && inType == contextType {
         takesContext = true
+      } else if j == 0 && inType == callContextType {
+        takesCallContext = true
       } else {
         argTypes = append(argTypes, inType)
       }
@@ -78,6 +112,7 @@ func (reg *registry) Register(namespace string, service interface{}) {
     reg.callbacks[rpcName(namespace, meth.Name)] = &callback{
       fn: methVal,
       takesContext: takesContext,
+      takesCallContext: takesCallContext,
       errIndex: errIndex,
       metaIndex: metaIndex,
       argTypes: argTypes,
@@ -112,6 +147,8 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
   argVals := []reflect.Value{}
   if cb.takesContext {
     argVals = append(argVals, reflect.ValueOf(ctx))
+  } else if cb.takesCallContext {
+    argVals = append(argVals, reflect.ValueOf(&CallContext{ctx, cm}))
   }
   for i, argType := range cb.argTypes {
     t := argType

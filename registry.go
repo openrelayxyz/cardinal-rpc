@@ -19,11 +19,33 @@ type Registry interface{
 }
 
 func NewRegistry() Registry {
-  return &registry{make(map[string]*callback)}
+  reg := &registry{make(map[string]*callback)}
+  reg.Register("rpc", &registryApi{reg})
+  return reg
 }
 
 type registry struct{
   callbacks map[string]*callback
+}
+
+type registryApi struct{
+  registry *registry
+}
+
+func (api *registryApi) Modules() map[string]string {
+  modules := make(map[string]string)
+  for method := range api.registry.callbacks {
+    modules[strings.Split(method, "_")[0]] = "1.0"
+  }
+  return modules
+}
+
+func (api *registryApi) Methods() []string {
+  methods := make([]string, 0, len(api.registry.callbacks))
+  for method := range api.registry.callbacks {
+    methods = append(methods, method)
+  }
+  return methods
 }
 
 type callback struct{

@@ -25,6 +25,10 @@ func (tm *TransportManager) Register(namespace string, service interface{}) {
   tm.registry.Register(namespace, service)
 }
 
+func (tm *TransportManager) RegisterMiddleware(item rpc.Middleware) {
+  tm.registry.RegisterMiddleware(item)
+}
+
 func (tm *TransportManager) AddHTTPServer(port int64) {
   tm.transports = append(tm.transports, NewHTTPTransport(port, tm.semaphore, tm.registry))
 }

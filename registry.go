@@ -16,16 +16,18 @@ import (
 type Registry interface{
   Call(ctx context.Context, method string, args []json.RawMessage) (interface{}, *RPCError, *CallMetadata)
   Register(namespace string, service interface{})
+  RegisterMiddleware(Middleware)
 }
 
 func NewRegistry() Registry {
-  reg := &registry{make(map[string]*callback)}
+  reg := &registry{make(map[string]*callback), []Middleware{}}
   reg.Register("rpc", &registryApi{reg})
   return reg
 }
 
 type registry struct{
   callbacks map[string]*callback
+  middleware []Middleware
 }
 
 type registryApi struct{
@@ -82,6 +84,7 @@ func (cm *CallMetadata) AddBigCompute(x *big.Int) {
 type CallContext struct {
   ctx context.Context
   meta *CallMetadata
+  data     map[string]interface{}
 }
 
 func (c *CallContext) Context() context.Context {
@@ -92,12 +95,28 @@ func (c *CallContext) Metadata() *CallMetadata {
   return c.meta
 }
 
+
+func (cm *CallContext) Set(key string, value interface{}) {
+  if cm.data == nil { cm.data = make(map[string]interface{}) }
+  cm.data[key] = value
+}
+
+func (cm *CallContext) Get(key string) (interface{}, bool) {
+  if cm.data == nil { return nil, false }
+  v, ok := cm.data[key]
+  return v, ok
+}
+
 var (
   contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
   errorType = reflect.TypeOf((*error)(nil)).Elem()
   metaType = reflect.TypeOf((*CallMetadata)(nil))
   callContextType = reflect.TypeOf((*CallContext)(nil))
 )
+
+func (reg *registry) RegisterMiddleware(m Middleware) {
+  reg.middleware = append(reg.middleware, m)
+}
 
 func (reg *registry) Register(namespace string, service interface{}) {
   receiver := reflect.ValueOf(service)
@@ -161,16 +180,34 @@ func NewRPCError(code int, msg string) *RPCError {
 }
 
 func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
-  cm = &CallMetadata{}
+  cctx := &CallContext{ctx, &CallMetadata{}, nil}
   cb, ok := reg.callbacks[method]
   if !ok {
     return nil, NewRPCError(-32601, fmt.Sprintf("the method %v does not exist/is not available", method)), cm
   }
+  defer func() {
+    if err := recover(); err != nil {
+      const size = 64 << 10
+      buf := make([]byte, size)
+      buf = buf[:runtime.Stack(buf, false)]
+      log.Error("RPC method " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
+      errRes = NewRPCError(-1, "method handler crashed")
+    }
+  }()
+  for i, m := range reg.middleware {
+    res, err := m.Enter(cctx, method, args)
+    if res != nil || err != nil {
+      for j := i - 1; j >= 0 ; j-- {
+        res, err = reg.middleware[j].Exit(cctx, res, err)
+      }
+      return res, err, cctx.meta
+    }
+  }
   argVals := []reflect.Value{}
   if cb.takesContext {
-    argVals = append(argVals, reflect.ValueOf(ctx))
+    argVals = append(argVals, reflect.ValueOf(cctx.ctx))
   } else if cb.takesCallContext {
-    argVals = append(argVals, reflect.ValueOf(&CallContext{ctx, cm}))
+    argVals = append(argVals, reflect.ValueOf(cctx))
   }
   for i, argType := range cb.argTypes {
     t := argType
@@ -192,36 +229,32 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
     }
     argVals = append(argVals, arg.Elem())
   }
-  defer func() {
-		if err := recover(); err != nil {
-			const size = 64 << 10
-			buf := make([]byte, size)
-			buf = buf[:runtime.Stack(buf, false)]
-			log.Error("RPC method " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
-			errRes = NewRPCError(-1, "method handler crashed")
-		}
-	}()
   out := cb.fn.Call(argVals)
   if cb.metaIndex > -1 {
     var ok bool
     cm, ok = out[cb.metaIndex].Interface().(*CallMetadata)
     if !ok { cm = &CallMetadata{} }
   }
+  var rpcErr *RPCError
   if cb.errIndex > -1 {
     if val := out[cb.errIndex]; !val.IsNil() {
       switch v := val.Interface().(type) {
       case RPCError:
-        return nil, &v, cm
+        rpcErr = &v
       case *RPCError:
-        return nil, v, cm
+        rpcErr = v
       case error:
-        return nil, NewRPCError(-1, v.Error()), cm
+        rpcErr = NewRPCError(-1, v.Error())
       default:
-        return nil, NewRPCError(-1, "An unknown error has occurred"), cm
+        rpcErr = NewRPCError(-1, "An unknown error has occurred")
       }
     }
   }
-  return out[0].Interface(), nil, cm
+  res = out[0].Interface()
+  for i := len(reg.middleware) - 1; i >= 0 ; i-- {
+    res, rpcErr = reg.middleware[i].Exit(cctx, res, rpcErr)
+  }
+  return res, rpcErr, cctx.meta
 }
 
 func rpcName(namespace, method string) string {

@@ -112,6 +112,7 @@ var (
   errorType = reflect.TypeOf((*error)(nil)).Elem()
   metaType = reflect.TypeOf((*CallMetadata)(nil))
   callContextType = reflect.TypeOf((*CallContext)(nil))
+  healthStatusType = reflect.TypeOf(Healthy)
 )
 
 func (reg *registry) RegisterMiddleware(m Middleware) {
@@ -121,6 +122,7 @@ func (reg *registry) RegisterMiddleware(m Middleware) {
 func (reg *registry) Register(namespace string, service interface{}) {
   receiver := reflect.ValueOf(service)
   receiverType := receiver.Type()
+  METHOD_LOOP:
   for i := 0; i < receiverType.NumMethod(); i++ {
     meth := receiverType.Method(i)
     methVal := receiver.Method(i)
@@ -146,6 +148,9 @@ func (reg *registry) Register(namespace string, service interface{}) {
         errIndex = j
       case metaType:
         metaIndex = j
+      case healthStatusType:
+        // Health checks should not be registered as callbacks
+        continue METHOD_LOOP
       default:
         outtypes = append(outtypes, outType)
       }

@@ -1,16 +1,22 @@
 package transports
 
 import (
+  "context"
+  "fmt"
   "github.com/openrelayxyz/cardinal-rpc"
   "os"
   "os/signal"
   "syscall"
+  "net/http"
+  "time"
 )
 
 type TransportManager struct{
-  transports []Transport
-  semaphore  chan struct{}
-  registry   rpc.Registry
+  transports   []Transport
+  semaphore    chan struct{}
+  registry     rpc.Registry
+  healthChecks []rpc.HealthCheck
+  s            *http.Server
 }
 
 func NewTransportManager(concurrency int) *TransportManager {
@@ -18,6 +24,7 @@ func NewTransportManager(concurrency int) *TransportManager {
     transports: []Transport{},
     semaphore:  make(chan struct{}, concurrency),
     registry: rpc.NewRegistry(),
+    healthChecks: []rpc.HealthCheck{},
   }
 }
 
@@ -29,15 +36,55 @@ func (tm *TransportManager) RegisterMiddleware(item rpc.Middleware) {
   tm.registry.RegisterMiddleware(item)
 }
 
+func (tm *TransportManager) RegisterHealthCheck(hc rpc.HealthCheck) {
+  tm.healthChecks = append(tm.healthChecks, hc)
+}
+
 func (tm *TransportManager) AddHTTPServer(port int64) {
   tm.transports = append(tm.transports, NewHTTPTransport(port, tm.semaphore, tm.registry))
 }
 
-func (tm *TransportManager) Run() error {
+func (tm *TransportManager) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Type", "application/json")
+  hasWarning := false
+  for _, hc := range tm.healthChecks {
+    status := hc.Healthy()
+    if status == rpc.Unavailable {
+      w.WriteHeader(500)
+      w.Write([]byte(`{"ok": false}\n`))
+      return
+    }
+    if status == rpc.Warning {
+      hasWarning = true
+    }
+  }
+  if hasWarning {
+    w.WriteHeader(429)
+    w.Write([]byte(`{"ok": false}\n`))
+    return
+  }
+  w.WriteHeader(200)
+  w.Write([]byte(`{"ok": true}\n`))
+}
+
+func (tm *TransportManager) Run(hcport int64) error {
   failure := make(chan error)
   for _, t := range tm.transports {
     t.Start(failure)
   }
+  if hcport > 0 {
+    mux := http.NewServeMux()
+    mux.HandleFunc("/", tm.handleHealthCheck)
+    s := &http.Server{
+      Addr: fmt.Sprintf(":%v", hcport),
+      Handler: mux,
+      ReadHeaderTimeout: 250 * time.Millisecond,
+      MaxHeaderBytes: 1 << 20,
+    }
+    go func() { failure <- s.ListenAndServe() }()
+    defer s.Shutdown(context.Background())
+  }
+
   sigs := make(chan os.Signal, 1)
   signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
   select {

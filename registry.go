@@ -13,8 +13,12 @@ import (
   log "github.com/inconshreveable/log15"
 )
 
-type Registry interface{
+type RegistryCallable interface {
   Call(ctx context.Context, method string, args []json.RawMessage) (interface{}, *RPCError, *CallMetadata)
+}
+
+type Registry interface{
+  RegistryCallable
   Register(namespace string, service interface{})
   RegisterMiddleware(Middleware)
 }

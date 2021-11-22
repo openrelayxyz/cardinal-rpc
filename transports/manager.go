@@ -100,3 +100,7 @@ func (tm *TransportManager) Stop() {
     t.Stop()
   }
 }
+
+func (tm *TransportManager) Caller() rpc.RegistryCallable {
+  return tm.registry
+}

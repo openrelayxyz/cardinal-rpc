@@ -27,7 +27,6 @@ type Check struct {
 	MaxNormalResponseTime int64 `yaml:"max_normal_response_time_ms"`
 	heavyPassed bool
 	normalPassed bool
-	params []json.RawMessage
 }
 
 type Checks []Check
@@ -48,19 +47,18 @@ func (c Checks) Healthy() HealthStatus {
 	return Healthy
 }
 
-func (c Checks) Start(r Registry) {
+func (c Checks) Start(r RegistryCallable) {
 	for i := range c {
-		if c[i].params == nil {
-			if err := json.Unmarshal([]byte(c[i].Params), &c[i].params); err != nil {
-				log.Error("Error loading healthcheck params", "params", c[i].Params, "err", err)
-				continue
-			}
-		}
 		go func(i int) {
 			for {
+				time.Sleep(time.Duration(c[i].Frequency) * time.Second)
 				start := time.Now()
-				// TODO: Random element in params?
-				if _, _, err := r.Call(context.Background(), c[i].Method, c[i].params); err != nil {
+				params := []json.RawMessage{}
+				if err := json.Unmarshal([]byte(c[i].Params), &params); err != nil {
+					log.Error("Error loading healthcheck params", "params", c[i].Params, "err", err)
+					return
+				}
+				if _, _, err := r.Call(context.Background(), c[i].Method, params); err != nil {
 					c[i].heavyPassed = false
 					c[i].normalPassed = false
 				} else {

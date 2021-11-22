@@ -3,7 +3,9 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"encoding/hex"
 	"time"
+	"strings"
 	log "github.com/inconshreveable/log15"
 )
 
@@ -47,6 +49,12 @@ func (c Checks) Healthy() HealthStatus {
 	return Healthy
 }
 
+func cleanParams(s string) []byte {
+	randBytes := make([]byte, 5)
+	s = strings.Replace(s, "!RANDHEX", hex.EncodeToString(randBytes), -1)
+	return []byte(s)
+}
+
 func (c Checks) Start(r RegistryCallable) {
 	for i := range c {
 		go func(i int) {
@@ -54,7 +62,7 @@ func (c Checks) Start(r RegistryCallable) {
 				time.Sleep(time.Duration(c[i].Frequency) * time.Second)
 				start := time.Now()
 				params := []json.RawMessage{}
-				if err := json.Unmarshal([]byte(c[i].Params), &params); err != nil {
+				if err := json.Unmarshal(cleanParams(c[i].Params), &params); err != nil {
 					log.Error("Error loading healthcheck params", "params", c[i].Params, "err", err)
 					return
 				}

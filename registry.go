@@ -10,7 +10,14 @@ import (
   "strings"
   "time"
   "github.com/openrelayxyz/cardinal-types"
+  "github.com/openrelayxyz/cardinal-types/metrics"
+  gmetrics "github.com/rcrowley/go-metrics"
   log "github.com/inconshreveable/log15"
+)
+
+var (
+  cmeter = metrics.NewMajorMeter("/rpc/compute")
+  calltimer = metrics.NewMajorTimer("/rpc/timer")
 )
 
 type RegistryCallable interface {
@@ -61,6 +68,8 @@ type callback struct{
   errIndex         int
   metaIndex        int
   argTypes         []reflect.Type
+  cmeter           gmetrics.Meter
+  timer            gmetrics.Timer
 }
 
 type CallMetadata struct{
@@ -166,6 +175,8 @@ func (reg *registry) Register(namespace string, service interface{}) {
       errIndex: errIndex,
       metaIndex: metaIndex,
       argTypes: argTypes,
+      cmeter: metrics.NewMinorMeter(fmt.Sprintf("/rpc/%v/%v/compute", namespace, meth.Name)),
+      timer: metrics.NewMinorTimer(fmt.Sprintf("/rpc/%v/%v/timer", namespace, meth.Name)),
     }
     log.Debug("Registered callback", "name", rpcName(namespace, meth.Name), "args", argTypes)
   }
@@ -189,11 +200,20 @@ func NewRPCError(code int, msg string) *RPCError {
 }
 
 func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
+  start := time.Now()
   cctx := &CallContext{ctx, &CallMetadata{}, nil}
   cb, ok := reg.callbacks[method]
   if !ok {
-    return nil, NewRPCError(-32601, fmt.Sprintf("the method %v does not exist/is not available", method)), cm
+    return nil, NewRPCError(-32601, fmt.Sprintf("the method %v does not exist/is not available", method)), cctx.meta
   }
+  defer func() {
+    cb.timer.UpdateSince(start)
+    calltimer.UpdateSince(start)
+    if compute := cctx.Metadata().Compute; compute != nil {
+      cb.cmeter.Mark(compute.Int64())
+      cmeter.Mark(compute.Int64())
+    }
+  }()
   defer func() {
     if err := recover(); err != nil {
       const size = 64 << 10

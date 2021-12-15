@@ -18,6 +18,7 @@ import (
 var (
   cmeter = metrics.NewMajorMeter("/rpc/compute")
   calltimer = metrics.NewMajorTimer("/rpc/timer")
+  crashMeter = metrics.NewMajorCounter("/rpc/crash")
 )
 
 type RegistryCallable interface {
@@ -219,6 +220,7 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
       const size = 64 << 10
       buf := make([]byte, size)
       buf = buf[:runtime.Stack(buf, false)]
+      crashMeter.Inc(1)
       log.Error("RPC method " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
       errRes = NewRPCError(-1, "method handler crashed")
     }

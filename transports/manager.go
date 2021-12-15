@@ -4,11 +4,16 @@ import (
   "context"
   "fmt"
   "github.com/openrelayxyz/cardinal-rpc"
+  "github.com/openrelayxyz/cardinal-types/metrics"
   "os"
   "os/signal"
   "syscall"
   "net/http"
   "time"
+)
+
+var (
+  concurrencyMeter = metrics.NewMajorHistogram("/rpc/concurrency")
 )
 
 type TransportManager struct{
@@ -72,6 +77,13 @@ func (tm *TransportManager) Run(hcport int64) error {
   for _, t := range tm.transports {
     t.Start(failure)
   }
+  go func() {
+    t := time.Ticker(time.Second)
+    defer t.Stop()
+    for range t.C {
+      concurrencyMeter.Update(len(tm.semaphore))
+    }
+  }()
   if hcport > 0 {
     mux := http.NewServeMux()
     mux.HandleFunc("/", tm.handleHealthCheck)

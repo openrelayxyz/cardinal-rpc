@@ -249,14 +249,14 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
     }
     if len(args) <= i {
       if derefs == 0 {
-        return nil, NewRPCError(-32602, fmt.Sprintf("missing value for required argument %v", i)), cm
+        return nil, NewRPCError(-32602, fmt.Sprintf("missing value for required argument %v", i)), cctx.meta
       }
       argVals = append(argVals, reflect.Zero(argType))
       continue
     }
     arg := reflect.New(argType)
     if err := json.Unmarshal(args[i], arg.Interface()); err != nil {
-      return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error())), cm
+      return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error())), cctx.meta
     }
     argVals = append(argVals, arg.Elem())
   }

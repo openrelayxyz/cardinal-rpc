@@ -78,10 +78,10 @@ func (tm *TransportManager) Run(hcport int64) error {
     t.Start(failure)
   }
   go func() {
-    t := time.Ticker(time.Second)
+    t := time.NewTicker(time.Second)
     defer t.Stop()
     for range t.C {
-      concurrencyMeter.Update(len(tm.semaphore))
+      concurrencyMeter.Update(int64(len(tm.semaphore)))
     }
   }()
   if hcport > 0 {

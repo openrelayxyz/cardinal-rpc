@@ -223,6 +223,7 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
       crashMeter.Inc(1)
       log.Error("RPC method " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
       errRes = NewRPCError(-1, "method handler crashed")
+      cm = cctx.meta
     }
   }()
   for i, m := range reg.middleware {

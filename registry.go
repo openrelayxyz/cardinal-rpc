@@ -186,6 +186,7 @@ func (reg *registry) Register(namespace string, service interface{}) {
 type RPCError struct{
   C int    `json:"code"`
   Msg  string `json:"message"`
+  Data interface{} `json:"data,omitempty"`
 }
 
 func (err *RPCError) Error() string {
@@ -196,8 +197,18 @@ func (err *RPCError) Code() int {
   return err.C
 }
 
+type rpcError interface{
+  error
+  ErrorCode() int
+  ErrorData() interface{}
+}
+
 func NewRPCError(code int, msg string) *RPCError {
   return &RPCError{C: code, Msg:msg}
+}
+
+func NewRPCErrorWithData(code int, msg string, data interface{}) *RPCError {
+  return &RPCError{C: code, Msg: msg, Data: data}
 }
 
 func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
@@ -275,6 +286,8 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
         rpcErr = &v
       case *RPCError:
         rpcErr = v
+      case rpcError:
+        rpcErr = NewRPCErrorWithData(v.ErrorCode(), v.Error(), v.ErrorData())
       case error:
         rpcErr = NewRPCError(-1, v.Error())
       default:

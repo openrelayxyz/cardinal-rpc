@@ -151,13 +151,19 @@ func (t *httpTransport) handleSingle(ctx context.Context, call *rpcCall) *rpcRes
   result, err, meta := t.registry.Call(ctx, call.Method, call.Params)
   <-t.semaphore
   meta.Duration = time.Since(start)
-  return &rpcResponse{
+  response := &rpcResponse{
     Version: "2.0",
     ID: call.ID,
     Result: result,
     Error: err,
     meta: meta,
   }
+  if err == nil {
+    response.Result = result
+  } else {
+    response.Error = err
+  }
+  return response
 }
 
 func (t *httpTransport) handleBatch(ctx context.Context, calls []rpcCall) []rpcResponse {

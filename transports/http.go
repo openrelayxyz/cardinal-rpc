@@ -154,8 +154,6 @@ func (t *httpTransport) handleSingle(ctx context.Context, call *rpcCall) *rpcRes
   response := &rpcResponse{
     Version: "2.0",
     ID: call.ID,
-    Result: result,
-    Error: err,
     meta: meta,
   }
   if err == nil {

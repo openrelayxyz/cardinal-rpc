@@ -107,6 +107,7 @@ func (t *httpTransport) Start(failure chan error) error {
     Addr: fmt.Sprintf(":%v", t.port),
     Handler: gziphandler.GzipHandler(cors.Default().Handler(mux)),
     ReadHeaderTimeout: 5 * time.Second,
+    IdleTimeout: 120 * time.Second,
     MaxHeaderBytes: 1 << 20,
   }
   go func() { failure <- t.s.ListenAndServe() }()

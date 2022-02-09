@@ -10,6 +10,7 @@ import (
   "syscall"
   "net/http"
   "time"
+  log "github.com/inconshreveable/log15"
 )
 
 var (
@@ -22,6 +23,7 @@ type TransportManager struct{
   registry     rpc.Registry
   healthChecks []rpc.HealthCheck
   s            *http.Server
+  shutdown     bool
 }
 
 func NewTransportManager(concurrency int) *TransportManager {
@@ -30,6 +32,7 @@ func NewTransportManager(concurrency int) *TransportManager {
     semaphore:  make(chan struct{}, concurrency),
     registry: rpc.NewRegistry(),
     healthChecks: []rpc.HealthCheck{},
+    shutdown: false,
   }
 }
 
@@ -52,6 +55,11 @@ func (tm *TransportManager) AddHTTPServer(port int64) {
 func (tm *TransportManager) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
   w.Header().Set("Content-Type", "application/json")
   hasWarning := false
+  if tm.shutdown {
+    w.WriteHeader(500)
+    w.Write([]byte(`{"ok": false}\n`))
+    return
+  }
   for _, hc := range tm.healthChecks {
     status := hc.Healthy()
     if status == rpc.Unavailable {
@@ -103,6 +111,9 @@ func (tm *TransportManager) Run(hcport int64) error {
   case err := <- failure:
     return err
   case <-sigs:
+    log.Info("Caught shutdown signal. Waiting 30s ")
+    tm.shutdown = true
+    time.Sleep(30)
     return nil
   }
 }

@@ -5,6 +5,7 @@ import (
   "encoding/json"
   "fmt"
   "testing"
+  "reflect"
   log "github.com/inconshreveable/log15"
 )
 
@@ -12,6 +13,22 @@ type testService struct{}
 
 func (t *testService) Hello() string {
   return "Hello World"
+}
+
+func (t *testService) NilInterface() interface{} {
+  return nil
+}
+
+func (t *testService) EmptyString() string {
+  return ""
+}
+
+func (t *testService) EmptyList() []string {
+  return []string{}
+}
+
+func (t *testService) EmptyMap() map[string]string {
+  return make(map[string]string)
 }
 
 func (t *testService) FooBar(foo string, bar int) (string, error) {
@@ -46,6 +63,39 @@ func TestCallComplex(t *testing.T) {
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
   if v != "Hello World Foo 13" { t.Errorf("Unexpected output") }
+}
+
+type nilTest struct {
+  call string
+  kind reflect.Kind
+  render string
+}
+
+var nilTests = []nilTest{
+  {"test_nilInterface", reflect.Interface, "null"},
+  {"test_emptyString", reflect.String, `""`},
+  {"test_emptyList", reflect.Slice, "[]"},
+  {"test_emptyMap", reflect.Map, "{}"},
+}
+
+
+func TestCallNilResult(t *testing.T) {
+  registry := NewRegistry()
+  registry.Register("test", &testService{})
+  for _, nt := range nilTests {
+    t.Run(nt.call, func(t *testing.T) {
+      out, err, _ := registry.Call(context.Background(), nt.call, []json.RawMessage{})
+      if err != nil { t.Errorf(err.Error()) }
+      v, ok := out.(hardEmpty)
+      if !ok { t.Errorf("Expected type to be hardEmpty") }
+      if v.kind != nt.kind { t.Errorf("Unexpected kind. Expected %v, got %v", nt.kind, v.kind) }
+      data, e := json.Marshal(out)
+      if e != nil { t.Errorf(e.Error()) }
+      if string(data) != nt.render {
+        t.Errorf("Unexpected JSON marshal. Expected %v, got %v", nt.render, string(data))
+      }
+    })
+  }
 }
 
 func TestCallErrors(t *testing.T) {

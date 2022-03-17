@@ -203,8 +203,48 @@ type rpcError interface{
   ErrorData() interface{}
 }
 
+type hardEmpty struct{
+  kind reflect.Kind
+}
+
+func (he hardEmpty) MarshalJSON() ([]byte, error) {
+	switch he.kind {
+	case reflect.Array, reflect.Slice:
+		return []byte("[]"), nil
+	case reflect.Map:
+		return []byte("{}"), nil
+	case reflect.String:
+		return []byte(`""`), nil
+	case reflect.Bool:
+		return []byte("false"), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr, reflect.Float32, reflect.Float64:
+		return []byte("0"), nil
+	default:
+		return []byte("null"), nil
+	}
+}
+
 func NewRPCError(code int, msg string) *RPCError {
   return &RPCError{C: code, Msg:msg}
+}
+
+func emptyValue(v reflect.Value) (bool, reflect.Kind) {
+	kind := v.Kind()
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return v.Len() == 0, kind
+	case reflect.Bool:
+		return !v.Bool(), kind
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0, kind
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0, kind
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0, kind
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil(), kind
+	}
+	return false, reflect.Invalid
 }
 
 func NewRPCErrorWithData(code int, msg string, data interface{}) *RPCError {
@@ -296,6 +336,9 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
     }
   }
   res = out[0].Interface()
+  if empty, kind := emptyValue(out[0]); empty && rpcErr == nil {
+    res = hardEmpty{kind}
+  }
   for i := len(reg.middleware) - 1; i >= 0 ; i-- {
     res, rpcErr = reg.middleware[i].Exit(cctx, res, rpcErr)
   }

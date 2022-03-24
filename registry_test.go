@@ -52,6 +52,26 @@ func TestRegister(t *testing.T) {
   if v != "Hello World" { t.Errorf("Unexpected output") }
 }
 
+func TestMissing(t *testing.T) {
+  registry := NewRegistry()
+  _, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{})
+  if err == nil { t.Errorf("expected method to be missing") }
+  if code := err.Code(); code != -32601 {
+    t.Errorf("Expected error code -32601, got %v", code)
+  }
+}
+func TestCustomMissing(t *testing.T) {
+  registry := NewRegistry()
+  registry.OnMissing(func(cctx *CallContext, method string, args []json.RawMessage) (interface{}, *RPCError, *CallMetadata) {
+    return "Woops 404", nil, cctx.meta
+  })
+  out, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{})
+  if err != nil { t.Errorf(err.Error()) }
+  v, ok := out.(string)
+  if !ok { t.Errorf("Expected type") }
+  if v != "Woops 404" { t.Errorf("Unexpected output") }
+}
+
 func TestCallComplex(t *testing.T) {
   registry := NewRegistry()
   registry.Register("test", &testService{})
@@ -144,7 +164,11 @@ func (*exitMW) Enter(cctx *CallContext, method string, args []json.RawMessage) (
 }
 
 func (*exitMW) Exit(cctx *CallContext, result interface{}, err *RPCError) (interface{}, *RPCError) {
-  return err.Error(), nil
+  if err != nil {
+    return err.Error(), nil
+  } else {
+    return nil, nil
+  }
 }
 
 func TestExitMiddleware(t *testing.T) {

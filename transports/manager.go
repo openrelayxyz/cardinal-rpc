@@ -48,6 +48,10 @@ func (tm *TransportManager) RegisterHealthCheck(hc rpc.HealthCheck) {
   tm.healthChecks = append(tm.healthChecks, hc)
 }
 
+func (tm *TransportManager) OnMissing(fn func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata)) {
+  tm.registry.OnMissing(fn)
+}
+
 func (tm *TransportManager) AddHTTPServer(port int64) {
   tm.transports = append(tm.transports, NewHTTPTransport(port, tm.semaphore, tm.registry))
 }

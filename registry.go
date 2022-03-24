@@ -29,10 +29,11 @@ type Registry interface{
   RegistryCallable
   Register(namespace string, service interface{})
   RegisterMiddleware(Middleware)
+  OnMissing(func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata))
 }
 
 func NewRegistry() Registry {
-  reg := &registry{make(map[string]*callback), []Middleware{}}
+  reg := &registry{make(map[string]*callback), []Middleware{}, handleMissing}
   reg.Register("rpc", &registryApi{reg})
   return reg
 }
@@ -40,6 +41,7 @@ func NewRegistry() Registry {
 type registry struct{
   callbacks map[string]*callback
   middleware []Middleware
+  onMissing func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata)
 }
 
 type registryApi struct{
@@ -251,21 +253,58 @@ func NewRPCErrorWithData(code int, msg string, data interface{}) *RPCError {
   return &RPCError{C: code, Msg: msg, Data: data}
 }
 
+func handleMissing(cctx *CallContext, method string, args []json.RawMessage) (interface{}, *RPCError, *CallMetadata) {
+  return nil, NewRPCError(-32601, fmt.Sprintf("the method %v does not exist/is not available", method)), cctx.meta
+}
+
+func (reg *registry) OnMissing(fn func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata)) {
+  reg.onMissing = fn
+
+}
+
 func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
   start := time.Now()
   cctx := &CallContext{ctx, &CallMetadata{}, nil}
-  cb, ok := reg.callbacks[method]
-  if !ok {
-    return nil, NewRPCError(-32601, fmt.Sprintf("the method %v does not exist/is not available", method)), cctx.meta
-  }
   defer func() {
-    cb.timer.UpdateSince(start)
     calltimer.UpdateSince(start)
     if compute := cctx.Metadata().Compute; compute != nil {
-      cb.cmeter.Mark(compute.Int64())
       cmeter.Mark(compute.Int64())
     }
   }()
+  defer func() {
+    if err := recover(); err != nil {
+      const size = 64 << 10
+      buf := make([]byte, size)
+      buf = buf[:runtime.Stack(buf, false)]
+      crashMeter.Inc(1)
+      log.Error("RPC middleware handler crashed on " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
+      errRes = NewRPCError(-1, "method handler crashed")
+      cm = cctx.meta
+    }
+  }()
+  for _, m := range reg.middleware {
+    defer func () {
+      res, errRes = m.Exit(cctx, res, errRes)
+    }()
+    res, err := m.Enter(cctx, method, args)
+    if res != nil || err != nil {
+      return res, err, cctx.meta
+    }
+  }
+  return reg.call(cctx, method, args)
+}
+
+func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
+  cb, ok := reg.callbacks[method]
+  if !ok {
+    return reg.onMissing(cctx, method, args)
+  }
+  defer func (start time.Time){
+    cb.timer.UpdateSince(start)
+    if compute := cctx.Metadata().Compute; compute != nil {
+      cb.cmeter.Mark(compute.Int64())
+    }
+  }(time.Now())
   defer func() {
     if err := recover(); err != nil {
       const size = 64 << 10
@@ -277,15 +316,6 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
       cm = cctx.meta
     }
   }()
-  for i, m := range reg.middleware {
-    res, err := m.Enter(cctx, method, args)
-    if res != nil || err != nil {
-      for j := i - 1; j >= 0 ; j-- {
-        res, err = reg.middleware[j].Exit(cctx, res, err)
-      }
-      return res, err, cctx.meta
-    }
-  }
   argVals := []reflect.Value{}
   if cb.takesContext {
     argVals = append(argVals, reflect.ValueOf(cctx.ctx))
@@ -338,9 +368,6 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
   res = out[0].Interface()
   if empty, kind := emptyValue(out[0]); empty && rpcErr == nil {
     res = hardEmpty{kind}
-  }
-  for i := len(reg.middleware) - 1; i >= 0 ; i-- {
-    res, rpcErr = reg.middleware[i].Exit(cctx, res, rpcErr)
   }
   return res, rpcErr, cctx.meta
 }

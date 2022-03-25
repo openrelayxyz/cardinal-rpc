@@ -97,32 +97,6 @@ func (cm *CallMetadata) AddBigCompute(x *big.Int) {
   }
 }
 
-type CallContext struct {
-  ctx context.Context
-  meta *CallMetadata
-  data     map[string]interface{}
-}
-
-func (c *CallContext) Context() context.Context {
-  return c.ctx
-}
-
-func (c *CallContext) Metadata() *CallMetadata {
-  return c.meta
-}
-
-
-func (cm *CallContext) Set(key string, value interface{}) {
-  if cm.data == nil { cm.data = make(map[string]interface{}) }
-  cm.data[key] = value
-}
-
-func (cm *CallContext) Get(key string) (interface{}, bool) {
-  if cm.data == nil { return nil, false }
-  v, ok := cm.data[key]
-  return v, ok
-}
-
 var (
   contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
   errorType = reflect.TypeOf((*error)(nil)).Elem()

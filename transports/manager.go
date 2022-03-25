@@ -2,6 +2,7 @@ package transports
 
 import (
   "context"
+  "encoding/json"
   "fmt"
   "github.com/openrelayxyz/cardinal-rpc"
   "github.com/openrelayxyz/cardinal-types/metrics"
@@ -48,7 +49,7 @@ func (tm *TransportManager) RegisterHealthCheck(hc rpc.HealthCheck) {
   tm.healthChecks = append(tm.healthChecks, hc)
 }
 
-func (tm *TransportManager) OnMissing(fn func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata)) {
+func (tm *TransportManager) OnMissing(fn func(*rpc.CallContext, string, []json.RawMessage) (interface{}, *rpc.RPCError, *rpc.CallMetadata)) {
   tm.registry.OnMissing(fn)
 }
 

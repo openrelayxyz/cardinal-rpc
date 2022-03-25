@@ -35,25 +35,9 @@ func NewHTTPTransport(port int64, semaphore chan struct{}, registry rpc.Registry
   }
 }
 
-type rpcCall struct {
-  Version string            `json:"jsonrpc"`
-  ID      json.RawMessage   `json:"id"`
-  Method  string            `json:"method"`
-  Params  []json.RawMessage `json:"params"`
-}
-
-type rpcResponse struct{
-  Version string          `json:"jsonrpc"`
-  ID      json.RawMessage `json:"id"`
-  Error   *rpc.RPCError   `json:"error,omitempty"`
-  Result  interface{}     `json:"result,omitempty"`
-  Params  interface{}     `json:"params,omitempty"`
-  meta    *rpc.CallMetadata
-}
-
 func handleError(w http.ResponseWriter, err error) {
   w.WriteHeader(400)
-  response, _ := json.Marshal(&rpcResponse{
+  response, _ := json.Marshal(&rpc.Response{
     Version: "2.0",
     ID: json.RawMessage("-1"),
     Error: rpc.NewRPCError(-1, err.Error()),
@@ -62,22 +46,22 @@ func handleError(w http.ResponseWriter, err error) {
 }
 func writeResponse(w http.ResponseWriter, result interface{}) {
   switch v := result.(type) {
-  case *rpcResponse:
-    w.Header().Set("X-Response-Time", fmt.Sprintf("%vns", v.meta.Duration.Nanoseconds()))
-    if v.meta.Hash != (types.Hash{}) {
-      w.Header().Set("X-Hash", fmt.Sprintf("%#x", v.meta.Hash))
+  case *rpc.Response:
+    w.Header().Set("X-Response-Time", fmt.Sprintf("%vns", v.Meta.Duration.Nanoseconds()))
+    if v.Meta.Hash != (types.Hash{}) {
+      w.Header().Set("X-Hash", fmt.Sprintf("%#x", v.Meta.Hash))
     }
-    if v.meta.Compute != nil {
-      w.Header().Set("X-Compute-Cost", v.meta.Compute.String())
+    if v.Meta.Compute != nil {
+      w.Header().Set("X-Compute-Cost", v.Meta.Compute.String())
     }
-  case []rpcResponse:
+  case []rpc.Response:
     totalDuration := int64(0)
     hashes := map[string]struct{}{}
     totalCompute := new(big.Int)
     for _, call := range v {
-      totalDuration += call.meta.Duration.Nanoseconds()
-      if call.meta.Hash != (types.Hash{}) { hashes[call.meta.Hash.Hex()] = struct{}{} }
-      if call.meta.Compute != nil { totalCompute.Add(totalCompute, call.meta.Compute) }
+      totalDuration += call.Meta.Duration.Nanoseconds()
+      if call.Meta.Hash != (types.Hash{}) { hashes[call.Meta.Hash.Hex()] = struct{}{} }
+      if call.Meta.Compute != nil { totalCompute.Add(totalCompute, call.Meta.Compute) }
     }
     w.Header().Set("X-Response-Time", fmt.Sprintf("%vns", totalDuration))
     if len(hashes) > 0 {
@@ -128,15 +112,15 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
     w.Write([]byte("{}"))
     return
   }
-  call := &rpcCall{}
+  call := &rpc.Call{}
   body, err := ioutil.ReadAll(r.Body)
-  if err != nil { return } // TODO: Handle response
+  if err != nil { return }
   if err := json.Unmarshal(body, call); err == nil {
     response := t.handleSingle(r.Context(), call)
     writeResponse(w, response)
     return
   }
-  calls := []rpcCall{}
+  calls := []rpc.Call{}
   if err := json.Unmarshal(body, &calls); err == nil {
     response := t.handleBatch(r.Context(), calls)
     writeResponse(w, response)
@@ -146,16 +130,16 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
   }
 }
 
-func (t *httpTransport) handleSingle(ctx context.Context, call *rpcCall) *rpcResponse {
+func (t *httpTransport) handleSingle(ctx context.Context, call *rpc.Call) *rpc.Response {
   t.semaphore <- struct{}{}
   start := time.Now()
   result, err, meta := t.registry.Call(ctx, call.Method, call.Params)
   <-t.semaphore
   meta.Duration = time.Since(start)
-  response := &rpcResponse{
+  response := &rpc.Response{
     Version: "2.0",
     ID: call.ID,
-    meta: meta,
+    Meta: meta,
   }
   if err == nil {
     response.Result = result
@@ -165,8 +149,8 @@ func (t *httpTransport) handleSingle(ctx context.Context, call *rpcCall) *rpcRes
   return response
 }
 
-func (t *httpTransport) handleBatch(ctx context.Context, calls []rpcCall) []rpcResponse {
-  results := make([]rpcResponse, len(calls))
+func (t *httpTransport) handleBatch(ctx context.Context, calls []rpc.Call) []rpc.Response {
+  results := make([]rpc.Response, len(calls))
   for i, call := range calls {
     results[i] = *t.handleSingle(ctx, &call)
   }

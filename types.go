@@ -25,10 +25,14 @@ func toRawMessages(items ...interface{}) ([]json.RawMessage, error) {
   return result, nil
 }
 
-func NewCall(method string, params []interface{}) (*Call, error) {
-  id, err := toRawMessages(atomic.AddInt64(&globalId, 1))
-  if err != nil { return nil, err }
+func NewCall(method string, params ...interface{}) (*Call, error) {
   rawparams, err := toRawMessages(params...)
+  if err != nil { return nil, err }
+  return NewCallParams(method, rawparams)
+}
+
+func NewCallParams(method string, rawparams []json.RawMessage) (*Call, error) {
+  id, err := toRawMessages(atomic.AddInt64(&globalId, 1))
   if err != nil { return nil, err }
   return &Call{
     Version: "2.0",
@@ -44,7 +48,16 @@ type Response struct{
   Error   *RPCError       `json:"error,omitempty"`
   Result  interface{}     `json:"result,omitempty"`
   Params  interface{}     `json:"params,omitempty"`
-  Meta    *CallMetadata
+  Meta    *CallMetadata   `json:"-"`
+}
+
+type RawResponse struct{
+  Version string          `json:"jsonrpc"`
+  ID      json.RawMessage `json:"id"`
+  Error   *RPCError       `json:"error,omitempty"`
+  Result  json.RawMessage `json:"result,omitempty"`
+  Params  json.RawMessage `json:"params,omitempty"`
+  Meta    *CallMetadata   `json:"-"`
 }
 
 type CallContext struct {

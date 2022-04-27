@@ -57,6 +57,10 @@ func (tm *TransportManager) AddHTTPServer(port int64) {
   tm.transports = append(tm.transports, NewHTTPTransport(port, tm.semaphore, tm.registry))
 }
 
+func (tm *TransportManager) AddWSServer(port int64) {
+  tm.transports = append(tm.transports, NewWSTransport(port, tm.semaphore, tm.registry))
+}
+
 func (tm *TransportManager) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
   w.Header().Set("Content-Type", "application/json")
   hasWarning := false

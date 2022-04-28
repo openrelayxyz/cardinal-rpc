@@ -18,7 +18,7 @@ func main() {
  type Service struct {
  }
 
-<<<<<<< HEAD
+
 func (s *Service) Hello() string {
   return "goodbuy horses"
 }
@@ -30,8 +30,3 @@ func (s *Service) Macaroni() string {
 func (s *Service) Listen() string {
   return "to Miles Davis"
 }
-=======
-func (s *Service) Hello () string {
-  return "goodbuy horses"
-  }
->>>>>>> 570e220d79a1f5b7a96e61dc4692ae1853339a05

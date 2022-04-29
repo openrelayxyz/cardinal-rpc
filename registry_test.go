@@ -52,6 +52,21 @@ func TestRegister(t *testing.T) {
   if v != "Hello World" { t.Errorf("Unexpected output") }
 }
 
+func TestSubscription(t *testing.T) {
+	registry := NewRegistry()
+	c := make(chan int, 1)
+	outputs := make(chan []bytes, 200)
+	// TODO: Implement subscriptionTest with GetItem method that pulls from c
+	registry.Register("test", &subscriptionTest{c})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out, err, _ := registry.Call(ctx, "test_subscribe", []json.RawMessage{json.RawMessage(`"getItem"`)}, outputs)
+	// TODO: Check that err == nil, out has expected values
+	c <- 5
+	result := <-outputs
+	// Check that result has a value of 5
+}
+
 func TestMissing(t *testing.T) {
   registry := NewRegistry()
   _, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil)

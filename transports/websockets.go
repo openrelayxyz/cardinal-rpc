@@ -11,6 +11,12 @@ import (
 	"github.com/gorilla/websocket"
 	log "github.com/inconshreveable/log15"
 	"github.com/openrelayxyz/cardinal-rpc"
+	"github.com/openrelayxyz/cardinal-types/metrics"
+)
+
+var (
+	connectionCounter = metrics.NewMajorCounter("/rpc/ws/conn")
+	pingPeriod = 29 * time.Second
 )
 
 type wsTransport struct {
@@ -29,36 +35,64 @@ func NewWSTransport(port int64, semaphore chan struct{}, registry rpc.Registry) 
 	}
 }
 
-var upgrader = websocket.Upgrader{} // use default options
+var upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(*http.Request) bool { return true },
+}
 
-func (ws *wsTransport) echo(w http.ResponseWriter, r *http.Request) {
+func (ws *wsTransport) handleWsFunc(w http.ResponseWriter, r *http.Request) {
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Info("upgrade error:", "error", err)
 		return
 	}
+	connectionCounter.Inc(1)
+	defer connectionCounter.Dec(1)
 	defer c.Close()
+	outputs := make(chan interface{}, 256)
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				c.WriteMessage(websocket.PingMessage, []byte{})
+			case output := <- outputs:
+				switch v := output.(type) {
+				case error:
+					response, _ := json.Marshal(&rpc.Response{
+						Version: "2.0",
+						ID: json.RawMessage("-1"),
+						Error: rpc.NewRPCError(-1, v.Error()),
+					})
+					c.WriteMessage(websocket.TextMessage, response)
+				default:
+					response, _ := json.Marshal(v)
+					c.WriteMessage(websocket.TextMessage, response)
+				}
+			}
+		}
+	}()
 	for {
 		call := &rpc.Call{}
-		mt, body, err := c.ReadMessage()
+		_, body, err := c.ReadMessage()
 		if err != nil {
 			return
 		}
 		if err := json.Unmarshal(body, call); err == nil {
 			response := ws.handleSingle(r.Context(), call)
-			r, _ := json.Marshal(response)
-			c.WriteMessage(mt, r)
+			outputs <- response
 			continue
 		}
 		calls := []rpc.Call{}
 		if err := json.Unmarshal(body, &calls); err == nil {
 			response := ws.handleBatch(r.Context(), calls)
-			for _, item := range response {
-				r, _ := json.Marshal(item)
-				c.WriteMessage(mt, r)
-			}
+			outputs <- response
 		} else {
-			handleError(w, err)
+			outputs <- err
 		}
 	}
 }
@@ -69,7 +103,7 @@ func (ws *wsTransport) Start(failure chan error) error {
 	}
 	rand.Seed(time.Now().UnixNano())
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", ws.echo)
+	mux.HandleFunc("/", ws.handleWsFunc)
 	ws.s = &http.Server{
 		Addr:              fmt.Sprintf(":%v", ws.port),
 		Handler:           mux,

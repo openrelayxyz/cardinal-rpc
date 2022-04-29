@@ -83,13 +83,13 @@ func (ws *wsTransport) handleWsFunc(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := json.Unmarshal(body, call); err == nil {
-			response := ws.handleSingle(r.Context(), call)
+			response := ws.handleSingle(r.Context(), call, outputs)
 			outputs <- response
 			continue
 		}
 		calls := []rpc.Call{}
 		if err := json.Unmarshal(body, &calls); err == nil {
-			response := ws.handleBatch(r.Context(), calls)
+			response := ws.handleBatch(r.Context(), calls, outputs)
 			outputs <- response
 		} else {
 			outputs <- err
@@ -122,10 +122,10 @@ func (ws *wsTransport) Stop() error {
 	return ws.s.Shutdown(context.Background())
 }
 
-func (ws *wsTransport) handleSingle(ctx context.Context, call *rpc.Call) *rpc.Response {
+func (ws *wsTransport) handleSingle(ctx context.Context, call *rpc.Call, outputs chan interface{}) *rpc.Response {
 	ws.semaphore <- struct{}{}
 	start := time.Now()
-	result, err, meta := ws.registry.Call(ctx, call.Method, call.Params)
+	result, err, meta := ws.registry.Call(ctx, call.Method, call.Params, outputs)
 	<-ws.semaphore
 	meta.Duration = time.Since(start)
 	response := &rpc.Response{
@@ -141,10 +141,10 @@ func (ws *wsTransport) handleSingle(ctx context.Context, call *rpc.Call) *rpc.Re
 	return response
 }
 
-func (ws *wsTransport) handleBatch(ctx context.Context, calls []rpc.Call) []rpc.Response {
+func (ws *wsTransport) handleBatch(ctx context.Context, calls []rpc.Call, outputs chan interface{}) []rpc.Response {
 	results := make([]rpc.Response, len(calls))
 	for i, call := range calls {
-		results[i] = *ws.handleSingle(ctx, &call)
+		results[i] = *ws.handleSingle(ctx, &call, outputs)
 	}
 	return results
 }

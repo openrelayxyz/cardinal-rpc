@@ -2,6 +2,8 @@ package main
 
 import (
   "github.com/openrelayxyz/cardinal-rpc/transports"
+	"time"
+	"context"
 )
 
 func main() {
@@ -29,4 +31,13 @@ func (s *Service) Macaroni() string {
 
 func (s *Service) Listen() string {
   return "to Miles Davis"
+}
+
+func (s *Service) Ticker(ctx context.Context, intervalInMs int64) (<-chan time.Time) {
+	ticker := time.NewTicker(time.Duration(intervalInMs) * time.Millisecond)
+	go func() {
+		<-ctx.Done()
+		ticker.Stop()
+	}()
+	return ticker.C
 }

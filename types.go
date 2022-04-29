@@ -4,6 +4,7 @@ import (
   "encoding/json"
   "context"
   "sync/atomic"
+  "github.com/openrelayxyz/cardinal-types/hexutil"
 )
 
 type Call struct {
@@ -49,6 +50,15 @@ type Response struct{
   Result  interface{}     `json:"result,omitempty"`
   Params  interface{}     `json:"params,omitempty"`
   Meta    *CallMetadata   `json:"-"`
+}
+
+type SubscriptionResponse struct {
+  Version string          `json:"jsonrpc"`
+  Method  string          `json:"method"`
+  Params  struct{
+    ID hexutil.Uint64 `json:"subscription"`
+    Result interface{} `json:"result"`
+  } `json:"params"`
 }
 
 type RawResponse struct{

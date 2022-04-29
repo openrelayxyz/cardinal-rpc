@@ -6,6 +6,7 @@ import (
 	"fmt"
 	log "github.com/inconshreveable/log15"
 	"github.com/openrelayxyz/cardinal-types"
+	"github.com/openrelayxyz/cardinal-types/hexutil"
 	"github.com/openrelayxyz/cardinal-types/metrics"
 	gmetrics "github.com/rcrowley/go-metrics"
 	"math/big"
@@ -22,7 +23,7 @@ var (
 )
 
 type RegistryCallable interface {
-	Call(ctx context.Context, method string, args []json.RawMessage) (interface{}, *RPCError, *CallMetadata)
+	Call(ctx context.Context, method string, args []json.RawMessage, output chan interface{}) (interface{}, *RPCError, *CallMetadata)
 }
 
 type Registry interface {
@@ -33,15 +34,25 @@ type Registry interface {
 }
 
 func NewRegistry() Registry {
-	reg := &registry{make(map[string]*callback), []Middleware{}, handleMissing}
+	reg := &registry{
+		callbacks: make(map[string]*callback),
+		subscriptions: make(map[string]*callback),
+		middleware: []Middleware{},
+		onMissing:handleMissing,
+		subscriptionCounter: make(map[context.Context]hexutil.Uint64),
+		subscriptionCancels: make(map[context.Context]map[hexutil.Uint64]func()),
+	}
 	reg.Register("rpc", &registryApi{reg})
 	return reg
 }
 
 type registry struct {
 	callbacks  map[string]*callback
+	subscriptions map[string]*callback
 	middleware []Middleware
 	onMissing  func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata)
+	subscriptionCounter map[context.Context]hexutil.Uint64
+	subscriptionCancels map[context.Context]map[hexutil.Uint64]func()
 }
 
 type registryApi struct {
@@ -119,6 +130,7 @@ METHOD_LOOP:
 		methType := methVal.Type()
 		takesContext := false
 		takesCallContext := false
+		isSubscription := false
 		errIndex := -1
 		metaIndex := -1
 		argTypes := []reflect.Type{}
@@ -142,18 +154,38 @@ METHOD_LOOP:
 				// Health checks should not be registered as callbacks
 				continue METHOD_LOOP
 			default:
+				if outType.Kind() == reflect.Chan {
+					if (outType.ChanDir() & reflect.RecvDir) != reflect.RecvDir {
+						log.Warn("Method returns non-receiving channel", "method", rpcName(namespace, meth.Name))
+						continue METHOD_LOOP
+					}
+					isSubscription = true
+				}
 				outtypes = append(outtypes, outType)
 			}
 		}
-		reg.callbacks[rpcName(namespace, meth.Name)] = &callback{
-			fn:               methVal,
-			takesContext:     takesContext,
-			takesCallContext: takesCallContext,
-			errIndex:         errIndex,
-			metaIndex:        metaIndex,
-			argTypes:         argTypes,
-			cmeter:           metrics.NewMinorMeter(fmt.Sprintf("/rpc/%v/%v/compute", namespace, meth.Name)),
-			timer:            metrics.NewMinorTimer(fmt.Sprintf("/rpc/%v/%v/timer", namespace, meth.Name)),
+		if !isSubscription {
+			reg.callbacks[rpcName(namespace, meth.Name)] = &callback{
+				fn:               methVal,
+				takesContext:     takesContext,
+				takesCallContext: takesCallContext,
+				errIndex:         errIndex,
+				metaIndex:        metaIndex,
+				argTypes:         argTypes,
+				cmeter:           metrics.NewMinorMeter(fmt.Sprintf("/rpc/%v/%v/compute", namespace, meth.Name)),
+				timer:            metrics.NewMinorTimer(fmt.Sprintf("/rpc/%v/%v/timer", namespace, meth.Name)),
+			}
+		} else {
+			reg.subscriptions[rpcName(namespace, meth.Name)] = &callback{
+				fn:               methVal,
+				takesContext:     takesContext,
+				takesCallContext: takesCallContext,
+				errIndex:         errIndex,
+				metaIndex:        metaIndex,
+				argTypes:         argTypes,
+				cmeter:           metrics.NewMinorMeter(fmt.Sprintf("/rpc/%v/%v/compute", namespace, meth.Name)),
+				timer:            metrics.NewMinorTimer(fmt.Sprintf("/rpc/%v/%v/timer", namespace, meth.Name)),
+			}
 		}
 		log.Debug("Registered callback", "name", rpcName(namespace, meth.Name), "args", argTypes)
 	}
@@ -236,7 +268,7 @@ func (reg *registry) OnMissing(fn func(*CallContext, string, []json.RawMessage) 
 
 }
 
-func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
+func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage, outputs chan interface{}) (res interface{}, errRes *RPCError, cm *CallMetadata) {
 	start := time.Now()
 	cctx := &CallContext{ctx, &CallMetadata{}, nil}
 	defer func() {
@@ -245,6 +277,29 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
 			cmeter.Mark(compute.Int64())
 		}
 	}()
+	if strings.HasSuffix(method, "_subscribe") {
+		if outputs == nil {
+			return nil, NewRPCError(-32000, "notifications not supported"), cctx.meta
+		}
+		return reg.subscribe(cctx, method, args, outputs)
+	}
+	if strings.HasSuffix(method, "_unsubscribe") {
+		var subid hexutil.Uint64
+		if err := json.Unmarshal(args[0], &subid); err != nil {
+			return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", 0, err.Error())), cctx.meta
+		}
+		if cancels, ok := reg.subscriptionCancels[ctx]; ok {
+			if fn, ok := cancels[subid]; ok {
+				fn()
+				delete(cancels, subid)
+			} else {
+				return nil, NewRPCError(-32000, "subscription not found"), cctx.meta
+			}
+		} else {
+			return nil, NewRPCError(-32000, "subscription not found"), cctx.meta
+		}
+		return true, nil, cctx.meta
+	}
 	defer func() {
 		if err := recover(); err != nil {
 			const size = 64 << 10
@@ -266,6 +321,98 @@ func (reg *registry) Call(ctx context.Context, method string, args []json.RawMes
 		}
 	}
 	return reg.call(cctx, method, args)
+}
+
+func (reg *registry) parseArgs(cctx *CallContext, cb *callback, args []json.RawMessage) ([]reflect.Value, *RPCError) {
+	argVals := []reflect.Value{}
+	if cb.takesContext {
+		argVals = append(argVals, reflect.ValueOf(cctx.ctx))
+	} else if cb.takesCallContext {
+		argVals = append(argVals, reflect.ValueOf(cctx))
+	}
+	for i, argType := range cb.argTypes {
+		t := argType
+		derefs := 0
+		for t.Kind() == reflect.Ptr {
+			t = t.Elem()
+			derefs++
+		}
+		if len(args) <= i {
+			if derefs == 0 {
+				return nil, NewRPCError(-32602, fmt.Sprintf("missing value for required argument %v", i))
+			}
+			argVals = append(argVals, reflect.Zero(argType))
+			continue
+		}
+		arg := reflect.New(argType)
+		if err := json.Unmarshal(args[i], arg.Interface()); err != nil {
+			return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error()))
+		}
+		argVals = append(argVals, arg.Elem())
+	}
+	return argVals, nil
+}
+
+func (reg *registry) subscribe(cctx *CallContext, method string, args []json.RawMessage, outputs chan interface{}) (res interface{}, errRes *RPCError, cm *CallMetadata) {
+	namespace := strings.Split(method, "_")[0]
+	var methodName string
+	if err := json.Unmarshal(args[0], &methodName); err != nil {
+		return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", 0, err.Error())), cctx.meta
+	}
+	cb, ok := reg.subscriptions[fmt.Sprintf("%v_%v", namespace, methodName)]
+	if !ok {
+		return reg.onMissing(cctx, method, args) // TODO: Figure out what this should do
+	}
+	subid := reg.subscriptionCounter[cctx.ctx]
+	reg.subscriptionCounter[cctx.ctx]++
+	if _, ok := reg.subscriptionCancels[cctx.ctx]; !ok {
+		reg.subscriptionCancels[cctx.ctx] = make(map[hexutil.Uint64]func())
+	}
+	// TODO: On connection close, cleanup subscriptionCounter, and suscriptionCancels
+
+	cctx.ctx, reg.subscriptionCancels[cctx.ctx][subid] = context.WithCancel(cctx.ctx)
+	argVals, err := reg.parseArgs(cctx, cb, args[1:])
+	if err != nil {
+		return nil, err, cctx.meta
+	}
+	out := cb.fn.Call(argVals)
+	var rpcErr *RPCError
+	if cb.errIndex > -1 {
+		if val := out[cb.errIndex]; !val.IsNil() {
+			switch v := val.Interface().(type) {
+			case RPCError:
+				rpcErr = &v
+			case *RPCError:
+				rpcErr = v
+			case rpcError:
+				rpcErr = NewRPCErrorWithData(v.ErrorCode(), v.Error(), v.ErrorData())
+			case error:
+				rpcErr = NewRPCError(-1, v.Error())
+			default:
+				rpcErr = NewRPCError(-1, "An unknown error has occurred")
+			}
+		}
+	}
+	if rpcErr != nil {
+		return nil, err, cctx.meta
+	}
+	go func(chVal reflect.Value, outputs chan interface{}, subid hexutil.Uint64) {
+		for {
+			item, ok := chVal.Recv()
+			if !ok {
+				return
+			}
+			response := &SubscriptionResponse{
+				Version: "2.0",
+				Method: method,
+			}
+			response.Params.ID = subid
+			response.Params.Result = item.Interface()
+			outputs <- response
+		}
+	}(out[0], outputs, subid)
+
+	return subid, nil, cctx.meta
 }
 
 func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
@@ -290,31 +437,9 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 			cm = cctx.meta
 		}
 	}()
-	argVals := []reflect.Value{}
-	if cb.takesContext {
-		argVals = append(argVals, reflect.ValueOf(cctx.ctx))
-	} else if cb.takesCallContext {
-		argVals = append(argVals, reflect.ValueOf(cctx))
-	}
-	for i, argType := range cb.argTypes {
-		t := argType
-		derefs := 0
-		for t.Kind() == reflect.Ptr {
-			t = t.Elem()
-			derefs++
-		}
-		if len(args) <= i {
-			if derefs == 0 {
-				return nil, NewRPCError(-32602, fmt.Sprintf("missing value for required argument %v", i)), cctx.meta
-			}
-			argVals = append(argVals, reflect.Zero(argType))
-			continue
-		}
-		arg := reflect.New(argType)
-		if err := json.Unmarshal(args[i], arg.Interface()); err != nil {
-			return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error())), cctx.meta
-		}
-		argVals = append(argVals, arg.Elem())
+	argVals, err := reg.parseArgs(cctx, cb, args)
+	if err != nil {
+		return nil, err, cctx.meta
 	}
 	out := cb.fn.Call(argVals)
 	if cb.metaIndex > -1 {

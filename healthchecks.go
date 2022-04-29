@@ -66,7 +66,7 @@ func (c Checks) Start(r RegistryCallable) {
 					log.Error("Error loading healthcheck params", "params", c[i].Params, "err", err)
 					return
 				}
-				if _, _, err := r.Call(context.Background(), c[i].Method, params); err != nil {
+				if _, _, err := r.Call(context.Background(), c[i].Method, params, nil); err != nil {
 					c[i].heavyPassed = false
 					c[i].normalPassed = false
 				} else {

@@ -31,6 +31,7 @@ type Registry interface {
 	Register(namespace string, service interface{})
 	RegisterMiddleware(Middleware)
 	OnMissing(func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata))
+	Disconnect(context.Context)
 }
 
 func NewRegistry() Registry {
@@ -353,6 +354,11 @@ func (reg *registry) parseArgs(cctx *CallContext, cb *callback, args []json.RawM
 	return argVals, nil
 }
 
+func (reg *registry) Disconnect(ctx context.Context) {
+	delete(reg.subscriptionCancels, ctx)
+	delete(reg.subscriptionCounter, ctx)
+}
+
 func (reg *registry) subscribe(cctx *CallContext, method string, args []json.RawMessage, outputs chan interface{}) (res interface{}, errRes *RPCError, cm *CallMetadata) {
 	namespace := strings.Split(method, "_")[0]
 	var methodName string
@@ -361,7 +367,7 @@ func (reg *registry) subscribe(cctx *CallContext, method string, args []json.Raw
 	}
 	cb, ok := reg.subscriptions[fmt.Sprintf("%v_%v", namespace, methodName)]
 	if !ok {
-		return reg.onMissing(cctx, method, args) // TODO: Figure out what this should do
+		return nil, NewRPCError(-32601, fmt.Sprintf(`no "%v" subscription in %v namespace`, methodName, namespace)), cctx.meta
 	}
 	subid := reg.subscriptionCounter[cctx.ctx]
 	reg.subscriptionCounter[cctx.ctx]++

@@ -50,6 +50,7 @@ func (ws *wsTransport) handleWsFunc(w http.ResponseWriter, r *http.Request) {
 	connectionCounter.Inc(1)
 	defer connectionCounter.Dec(1)
 	defer c.Close()
+	defer ws.registry.Disconnect(r.Context())
 	outputs := make(chan interface{}, 256)
 	go func() {
 		ticker := time.NewTicker(pingPeriod)

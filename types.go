@@ -60,6 +60,14 @@ type SubscriptionResponse struct {
     Result interface{} `json:"result"`
   } `json:"params"`
 }
+type SubscriptionResponseRaw struct {
+  Version string          `json:"jsonrpc"`
+  Method  string          `json:"method"`
+  Params  struct{
+    ID hexutil.Uint64 `json:"subscription"`
+    Result json.RawMessage `json:"result"`
+  } `json:"params"`
+}
 
 type RawResponse struct{
   Version string          `json:"jsonrpc"`

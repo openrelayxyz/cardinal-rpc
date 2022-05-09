@@ -403,6 +403,7 @@ func (reg *registry) subscribe(cctx *CallContext, method string, args []json.Raw
 		return nil, err, cctx.meta
 	}
 	go func(chVal reflect.Value, outputs chan interface{}, subid hexutil.Uint64) {
+		runtime.Gosched() // Help ensure the subscription id is sent before the first value from the channel
 		for {
 			item, ok := chVal.Recv()
 			if !ok {

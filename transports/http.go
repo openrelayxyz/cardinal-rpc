@@ -133,7 +133,7 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
 func (t *httpTransport) handleSingle(ctx context.Context, call *rpc.Call) *rpc.Response {
   t.semaphore <- struct{}{}
   start := time.Now()
-  result, err, meta := t.registry.Call(ctx, call.Method, call.Params)
+  result, err, meta := t.registry.Call(ctx, call.Method, call.Params, nil)
   <-t.semaphore
   meta.Duration = time.Since(start)
   response := &rpc.Response{

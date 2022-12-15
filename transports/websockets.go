@@ -99,6 +99,11 @@ func (ws *wsTransport) handleWsFunc(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		for len(output) > 10 {
+			// If someone's not reading the messages we're sending them, stop
+			// processing new requests from them to avoid large buffers.
+			time.Sleep(10 * time.Millsecond)
+		}
 		if err := json.Unmarshal(body, call); err == nil {
 			response := ws.handleSingle(r.Context(), call, outputs)
 			outputs <- response

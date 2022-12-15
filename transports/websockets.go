@@ -17,6 +17,7 @@ import (
 var (
 	connectionCounter = metrics.NewMajorCounter("/rpc/ws/conn")
 	pingPeriod = 29 * time.Second
+	idleTimeout = 120 * time.Second
 )
 
 type wsTransport struct {
@@ -60,7 +61,12 @@ func (ws *wsTransport) handleWsFunc(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				c.WriteMessage(websocket.PingMessage, []byte{})
+				c.SetWriteDeadline(time.Now().Add(idleTimeout))
+				if err := c.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					log.Debug("Failed to send ping", "err", err)
+					c.Close()
+					return
+				}
 			case output := <- outputs:
 				switch v := output.(type) {
 				case error:
@@ -69,10 +75,20 @@ func (ws *wsTransport) handleWsFunc(w http.ResponseWriter, r *http.Request) {
 						ID: json.RawMessage("-1"),
 						Error: rpc.NewRPCError(-1, v.Error()),
 					})
-					c.WriteMessage(websocket.TextMessage, response)
+					c.SetWriteDeadline(time.Now().Add(idleTimeout))
+					if err := c.WriteMessage(websocket.TextMessage, response); err != nil {
+						log.Debug("Failed to RPC Error", "err", err, "data", string(response))
+						c.Close()
+						return
+					}
 				default:
 					response, _ := json.Marshal(v)
-					c.WriteMessage(websocket.TextMessage, response)
+					c.SetWriteDeadline(time.Now().Add(idleTimeout))
+					if err := c.WriteMessage(websocket.TextMessage, response); err != nil {
+						log.Debug("Failed to RPC Response", "err", err, "data", string(response))
+						c.Close()
+						return
+					}
 				}
 			}
 		}
@@ -109,7 +125,7 @@ func (ws *wsTransport) Start(failure chan error) error {
 		Addr:              fmt.Sprintf(":%v", ws.port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    1 << 20,
 	}
 	go func() { failure <- ws.s.ListenAndServe() }()

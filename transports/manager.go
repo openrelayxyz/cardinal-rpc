@@ -122,7 +122,7 @@ func (tm *TransportManager) Run(hcport int64) error {
   case <-sigs:
     log.Info("Caught shutdown signal. Waiting 30s ")
     tm.shutdown = true
-    time.Sleep(30)
+    time.Sleep(30 * time.Second)
     return nil
   }
 }

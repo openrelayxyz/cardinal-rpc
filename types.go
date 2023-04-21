@@ -3,8 +3,12 @@ package rpc
 import (
   "encoding/json"
   "context"
+  "fmt"
+  "math"
+  "sync"
   "sync/atomic"
   "github.com/openrelayxyz/cardinal-types/hexutil"
+  "strings"
 )
 
 type Call struct {
@@ -82,6 +86,8 @@ type CallContext struct {
   ctx context.Context
   meta *CallMetadata
   data     map[string]interface{}
+  Latest int64
+  Await  func(int64)
 }
 
 func (c *CallContext) Context() context.Context {
@@ -102,4 +108,63 @@ func (cm *CallContext) Get(key string) (interface{}, bool) {
   if cm.data == nil { return nil, false }
   v, ok := cm.data[key]
   return v, ok
+}
+
+
+type latestUnmarshaller struct {
+  lock *sync.Mutex
+}
+
+var lm *latestUnmarshaller
+
+func init() {
+  lm = &latestUnmarshaller{lock: &sync.Mutex{}}
+}
+
+func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest int64) error {
+  if latest != -1 {
+    lm.lock.Lock()
+    ol := LatestBlockNumber
+    defer func() {
+      LatestBlockNumber = ol
+      lm.lock.Unlock()
+    }()
+    LatestBlockNumber = BlockNumber(latest)
+  }
+  return json.Unmarshal(data, value)
+}
+
+
+type BlockNumber int64
+
+var (
+  PendingBlockNumber  = BlockNumber(-2)
+  LatestBlockNumber   = BlockNumber(-1)
+  EarliestBlockNumber = BlockNumber(0)
+)
+
+func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
+  v := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(string(data)), `"`), `"`)
+
+  switch v {
+  case "earliest":
+    *bn = EarliestBlockNumber
+    return nil
+  case "latest":
+    *bn = LatestBlockNumber
+    return nil
+  case "pending":
+    *bn = PendingBlockNumber
+    return nil
+  }
+
+  n, err := hexutil.DecodeUint64(v)
+  if err != nil {
+    return err
+  }
+  if n > math.MaxInt64 {
+    return fmt.Errorf("block number larger than int64")
+  }
+  *bn = BlockNumber(n)
+  return nil
 }

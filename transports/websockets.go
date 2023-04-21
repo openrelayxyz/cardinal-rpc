@@ -28,10 +28,9 @@ type wsTransport struct {
 	registry  rpc.Registry
 }
 
-func NewWSTransport(port int64, semaphore chan struct{}, registry rpc.Registry) Transport {
+func NewWSTransport(port int64, registry rpc.Registry) Transport {
 	return &wsTransport{
 		port:      port,
-		semaphore: semaphore,
 		registry:  registry,
 	}
 }
@@ -147,7 +146,7 @@ func (ws *wsTransport) Stop() error {
 func (ws *wsTransport) handleSingle(ctx context.Context, call *rpc.Call, outputs chan interface{}) *rpc.Response {
 	ws.semaphore <- struct{}{}
 	start := time.Now()
-	result, err, meta := ws.registry.Call(ctx, call.Method, call.Params, outputs)
+	result, err, meta := ws.registry.Call(ctx, call.Method, call.Params, outputs, -1)
 	<-ws.semaphore
 	meta.Duration = time.Since(start)
 	response := &rpc.Response{

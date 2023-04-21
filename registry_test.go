@@ -5,6 +5,8 @@ import (
   "encoding/json"
   "fmt"
   "testing"
+  "strconv"
+  "time"
   "reflect"
   log "github.com/inconshreveable/log15"
 )
@@ -31,6 +33,15 @@ func (t *testService) EmptyMap() map[string]string {
   return make(map[string]string)
 }
 
+func (t *testService) BlockNumber(latest BlockNumber) string {
+  return strconv.Itoa(int(latest))
+}
+
+func (t *testService) Delay(cctx *CallContext) bool {
+	cctx.Await(cctx.Latest)
+	return true
+}
+
 func (t *testService) FooBar(foo string, bar int) (string, error) {
   if bar < 0 {
     return "", fmt.Errorf("Argument two cannot be negative")
@@ -43,44 +54,44 @@ func (t *testService) Panic() (error) {
 }
 
 func TestRegister(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
-  out, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil)
+  out, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil, -1)
   if err != nil { t.Errorf(err.Error()) }
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
   if v != "Hello World" { t.Errorf("Unexpected output") }
 }
 
-func TestSubscription(t *testing.T) {
-	registry := NewRegistry()
-	c := make(chan int, 1)
-	outputs := make(chan []bytes, 200)
-	// TODO: Implement subscriptionTest with GetItem method that pulls from c
-	registry.Register("test", &subscriptionTest{c})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	out, err, _ := registry.Call(ctx, "test_subscribe", []json.RawMessage{json.RawMessage(`"getItem"`)}, outputs)
-	// TODO: Check that err == nil, out has expected values
-	c <- 5
-	result := <-outputs
-	// Check that result has a value of 5
-}
+// func TestSubscription(t *testing.T) {
+//   registry := NewRegistry(16)
+//   c := make(chan int, 1)
+//   outputs := make(chan []byte, 200)
+//   // TODO: Implement subscriptionTest with GetItem method that pulls from c
+//   registry.Register("test", &subscriptionTest{c})
+//   ctx, cancel := context.WithCancel(context.Background())
+//   defer cancel()
+//   out, err, _ := registry.Call(ctx, "test_subscribe", []json.RawMessage{json.RawMessage(`"getItem"`)}, outputs, -1)
+//   // TODO: Check that err == nil, out has expected values
+//   c <- 5
+//   result := <-outputs
+//   // Check that result has a value of 5
+// }
 
 func TestMissing(t *testing.T) {
-  registry := NewRegistry()
-  _, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil)
+  registry := NewRegistry(16)
+  _, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil, -1)
   if err == nil { t.Errorf("expected method to be missing") }
   if code := err.Code(); code != -32601 {
     t.Errorf("Expected error code -32601, got %v", code)
   }
 }
 func TestCustomMissing(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.OnMissing(func(cctx *CallContext, method string, args []json.RawMessage) (interface{}, *RPCError, *CallMetadata) {
     return "Woops 404", nil, cctx.meta
   })
-  out, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil)
+  out, err, _ := registry.Call(context.Background(), "test_hello", []json.RawMessage{}, nil, -1)
   if err != nil { t.Errorf(err.Error()) }
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
@@ -88,16 +99,82 @@ func TestCustomMissing(t *testing.T) {
 }
 
 func TestCallComplex(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
   out, err, _ := registry.Call(context.Background(), "test_fooBar", []json.RawMessage{
     json.RawMessage(`"Foo"`),
     json.RawMessage("13"),
-  }, nil)
+  }, nil, -1)
   if err != nil { t.Errorf(err.Error()) }
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
   if v != "Hello World Foo 13" { t.Errorf("Unexpected output") }
+}
+
+func TestCallBn(t *testing.T) {
+  registry := NewRegistry(16)
+  registry.Register("test", &testService{})
+  out, err, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"latest"`)}, nil, 3)
+  if err != nil { t.Errorf(err.Error()) }
+  v, ok := out.(string)
+  if !ok { t.Errorf("Expected type") }
+  if v != "3" { t.Errorf("Unexpected output") }
+  hf := make(chan int64)
+  registry.RegisterHeightFeed(hf)
+  start := time.Now()
+  hf <- 3
+  go func() {
+    time.Sleep(20 * time.Millisecond)
+    hf <- 51
+  }()
+  out2, err2, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"0x33"`)}, nil, 3)
+  if d := time.Since(start); d > 400 * time.Millisecond {
+    t.Errorf("Call time took too long: %v", d)
+  } else if d < 20 {
+    t.Errorf("Call time was too fast: %v", d)
+  }
+  if err2 != nil { t.Errorf(err2.Error()) }
+  v2, ok := out2.(string)
+  if !ok { t.Errorf("Expected type") }
+  if v2 != "51" { t.Errorf("Unexpected output, wanted '51' got %v", v2) }
+	start = time.Now()
+	go func() {
+    time.Sleep(20 * time.Millisecond)
+    hf <- 55
+  }()
+	_, err3, _ := registry.Call(context.Background(), "test_delay", []json.RawMessage{}, nil, 52)
+	if d := time.Since(start); d > 400 * time.Millisecond {
+    t.Errorf("Call time took too long: %v", d)
+  } else if d < 20 {
+    t.Errorf("Call time was too fast: %v", d)
+  }
+	if err3 != nil { t.Errorf(err3.Error()) }
+}
+
+func TestCollectItem(t *testing.T) {
+  x := collect[BlockNumber](BlockNumber(6))
+  if len(x) != 1 {
+    t.Errorf("Unexpected count")
+  }
+  if x[0] != 6 {
+    t.Errorf("Unexpected value")
+  }
+}
+
+func TestCollectFromStruct(t *testing.T) {
+  type q struct {
+    X *BlockNumber
+  }
+  p := BlockNumber(6)
+  w := q{X: &p}
+  x := collect[BlockNumber](&w)
+  if len(x) != 1 {
+    t.Fatalf("Unexpected count: %v", x)
+  }
+  if x[0] != 6 {
+    t.Errorf("Unexpected value")
+  }
+
 }
 
 type nilTest struct {
@@ -115,11 +192,11 @@ var nilTests = []nilTest{
 
 
 func TestCallNilResult(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
   for _, nt := range nilTests {
     t.Run(nt.call, func(t *testing.T) {
-      out, err, _ := registry.Call(context.Background(), nt.call, []json.RawMessage{}, nil)
+      out, err, _ := registry.Call(context.Background(), nt.call, []json.RawMessage{}, nil, -1)
       if err != nil { t.Errorf(err.Error()) }
       v, ok := out.(hardEmpty)
       if !ok { t.Errorf("Expected type to be hardEmpty") }
@@ -134,19 +211,19 @@ func TestCallNilResult(t *testing.T) {
 }
 
 func TestCallErrors(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
   _, err, _ := registry.Call(context.Background(), "test_fooBar", []json.RawMessage{
     json.RawMessage(`"Foo"`),
     json.RawMessage("-13"),
-  }, nil)
+  }, nil, -1)
   if err == nil { t.Errorf("Expected error, got none") }
 }
 
 func TestPanic(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
-  _, err, _ := registry.Call(context.Background(), "test_panic", []json.RawMessage{}, nil)
+  _, err, _ := registry.Call(context.Background(), "test_panic", []json.RawMessage{}, nil, -1)
   if err == nil { t.Errorf("Expected error, got none") }
   log.Info("The above stack trace is not indicative of a problem. We're testing that panics get handled properly, and part of that is logging the panic.")
 }
@@ -162,10 +239,10 @@ func (*helloMW) Exit(cctx *CallContext, result interface{}, err *RPCError) (inte
 }
 
 func TestSimpleMiddleware(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
   registry.RegisterMiddleware(&helloMW{})
-  out, err, _ := registry.Call(context.Background(), "test_panic", []json.RawMessage{}, nil)
+  out, err, _ := registry.Call(context.Background(), "test_panic", []json.RawMessage{}, nil, -1)
   if err != nil { t.Errorf(err.Error()) }
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
@@ -187,13 +264,13 @@ func (*exitMW) Exit(cctx *CallContext, result interface{}, err *RPCError) (inter
 }
 
 func TestExitMiddleware(t *testing.T) {
-  registry := NewRegistry()
+  registry := NewRegistry(16)
   registry.Register("test", &testService{})
   registry.RegisterMiddleware(&exitMW{})
   out, err, _ := registry.Call(context.Background(), "test_fooBar", []json.RawMessage{
     json.RawMessage(`"Foo"`),
     json.RawMessage("-13"),
-  }, nil)
+  }, nil, -1)
   if err != nil { t.Errorf("Unexpected error") }
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }

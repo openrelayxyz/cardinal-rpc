@@ -12,7 +12,8 @@ import
   "github.com/openrelayxyz/cardinal-types"
   "github.com/NYTimes/gziphandler"
   "github.com/rs/cors"
-  "strings"
+	"strconv"
+	"strings"
   "time"
   "io/ioutil"
   log "github.com/inconshreveable/log15"
@@ -27,10 +28,9 @@ type httpTransport struct {
   registry rpc.Registry
 }
 
-func NewHTTPTransport(port int64, semaphore chan struct{}, registry rpc.Registry) Transport {
+func NewHTTPTransport(port int64, registry rpc.Registry) Transport {
   return &httpTransport{
     port: port,
-    semaphore: semaphore,
     registry: registry,
   }
 }
@@ -112,17 +112,23 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
     w.Write([]byte("{}"))
     return
   }
+	latest := int64(-1)
+	if val := r.Header.Get("X-Cardinal-Latest"); val != "" {
+		if v, err := strconv.Atoi(val); err != nil {
+			latest = int64(v)
+		}
+	}
   call := &rpc.Call{}
   body, err := ioutil.ReadAll(r.Body)
   if err != nil { return }
   if err := json.Unmarshal(body, call); err == nil {
-    response := t.handleSingle(r.Context(), call)
+    response := t.handleSingle(r.Context(), call, latest)
     writeResponse(w, response)
     return
   }
   calls := []rpc.Call{}
   if err := json.Unmarshal(body, &calls); err == nil {
-    response := t.handleBatch(r.Context(), calls)
+    response := t.handleBatch(r.Context(), calls, latest)
     writeResponse(w, response)
     return
   } else {
@@ -130,10 +136,10 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
   }
 }
 
-func (t *httpTransport) handleSingle(ctx context.Context, call *rpc.Call) *rpc.Response {
+func (t *httpTransport) handleSingle(ctx context.Context, call *rpc.Call, latest int64) *rpc.Response {
   t.semaphore <- struct{}{}
   start := time.Now()
-  result, err, meta := t.registry.Call(ctx, call.Method, call.Params, nil)
+  result, err, meta := t.registry.Call(ctx, call.Method, call.Params, nil, latest)
   <-t.semaphore
   meta.Duration = time.Since(start)
   response := &rpc.Response{
@@ -149,10 +155,10 @@ func (t *httpTransport) handleSingle(ctx context.Context, call *rpc.Call) *rpc.R
   return response
 }
 
-func (t *httpTransport) handleBatch(ctx context.Context, calls []rpc.Call) []rpc.Response {
+func (t *httpTransport) handleBatch(ctx context.Context, calls []rpc.Call, latest int64) []rpc.Response {
   results := make([]rpc.Response, len(calls))
   for i, call := range calls {
-    results[i] = *t.handleSingle(ctx, &call)
+    results[i] = *t.handleSingle(ctx, &call, latest)
   }
   return results
 }

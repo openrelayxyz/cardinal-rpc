@@ -22,7 +22,6 @@ var (
 
 type wsTransport struct {
 	port      int64
-	semaphore chan struct{}
 	s         *http.Server
 	running   bool
 	registry  rpc.Registry
@@ -144,10 +143,8 @@ func (ws *wsTransport) Stop() error {
 }
 
 func (ws *wsTransport) handleSingle(ctx context.Context, call *rpc.Call, outputs chan interface{}) *rpc.Response {
-	ws.semaphore <- struct{}{}
 	start := time.Now()
 	result, err, meta := ws.registry.Call(ctx, call.Method, call.Params, outputs, -1)
-	<-ws.semaphore
 	meta.Duration = time.Since(start)
 	response := &rpc.Response{
 		Version: "2.0",

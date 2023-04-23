@@ -22,7 +22,6 @@ import
 
 type httpTransport struct {
   port int64
-  semaphore chan struct{}
   s *http.Server
   running bool
   registry rpc.Registry
@@ -137,10 +136,8 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
 }
 
 func (t *httpTransport) handleSingle(ctx context.Context, call *rpc.Call, latest int64) *rpc.Response {
-  t.semaphore <- struct{}{}
   start := time.Now()
   result, err, meta := t.registry.Call(ctx, call.Method, call.Params, nil, latest)
-  <-t.semaphore
   meta.Duration = time.Since(start)
   response := &rpc.Response{
     Version: "2.0",

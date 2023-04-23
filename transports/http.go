@@ -113,7 +113,7 @@ func (t *httpTransport) handleFunc(w http.ResponseWriter, r *http.Request) {
   }
 	latest := int64(-1)
 	if val := r.Header.Get("X-Cardinal-Latest"); val != "" {
-		if v, err := strconv.Atoi(val); err != nil {
+		if v, err := strconv.Atoi(val); err == nil {
 			latest = int64(v)
 		}
 	}

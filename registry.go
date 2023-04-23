@@ -588,20 +588,22 @@ func collect[T any](obj interface{}) []T {
 	results := []T{}
 	// Iterate over the fields of the object
 	for i := 0; i < val.NumField(); i++ {
-	  // Get the field of the object
-	  field := val.Field(i)
-	  // If the field is a pointer, dereference it
-	  if field.Kind() == reflect.Ptr {
+		// Get the field of the object
+		field := val.Field(i)
+		// If the field is a pointer, dereference it
+		if field.Kind() == reflect.Ptr {
 		field = field.Elem()
-	  }
-	  // If the field is of the target type, add it to the results
-	  if field.Type() == targetType {
-		results = append(results, field.Interface().(T))
-	  } else {
-		  // Recursively walk the field
-		  results = append(results, collect[T](field.Interface())...)
-	  }
+		}
+		// If the field is of the target type, add it to the results
+		if !field.IsZero() {
+			if field.Type() == targetType {
+			results = append(results, field.Interface().(T))
+			} else {
+				// Recursively walk the field
+				results = append(results, collect[T](field.Interface())...)
+			}
+		}
 	}
 	// Return the results
 	return results
-  }
+}

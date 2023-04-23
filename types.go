@@ -8,6 +8,7 @@ import (
   "sync"
   "sync/atomic"
   "github.com/openrelayxyz/cardinal-types/hexutil"
+  log "github.com/inconshreveable/log15"
   "strings"
 )
 
@@ -151,6 +152,7 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
     *bn = EarliestBlockNumber
     return nil
   case "latest":
+    log.Debug("Setting latest parameter", "value", LatestBlockNumber)
     *bn = LatestBlockNumber
     return nil
   case "pending":

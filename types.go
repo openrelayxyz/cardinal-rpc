@@ -8,6 +8,7 @@ import (
   "sync"
   "sync/atomic"
   "github.com/openrelayxyz/cardinal-types/hexutil"
+  log "github.com/inconshreveable/log15"
   "strings"
 )
 
@@ -127,9 +128,11 @@ func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest i
     ol := LatestBlockNumber
     defer func() {
       LatestBlockNumber = ol
+      log.Debug("Latest unset", "value", LatestBlockNumber)
       lm.lock.Unlock()
-    }()
-    LatestBlockNumber = BlockNumber(latest)
+      }()
+      LatestBlockNumber = BlockNumber(latest)
+      log.Debug("Latest set", "value", LatestBlockNumber)
   }
   return json.Unmarshal(data, value)
 }
@@ -151,6 +154,7 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
     *bn = EarliestBlockNumber
     return nil
   case "latest":
+    log.Debug("Setting latest parameter", "value", LatestBlockNumber)
     *bn = LatestBlockNumber
     return nil
   case "pending":

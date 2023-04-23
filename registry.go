@@ -173,6 +173,7 @@ func (reg *registry) await(v int64) {
 		feed = make(chan struct{})
 		reg.sleepFeeds[v] = feed
 	}
+	log.Debug("Waiting for block to become available", "number", v)
 	reg.sleepFeedLock.RUnlock()
 	t := time.NewTimer(reg.blockWaitDuration)
 	start := time.Now()
@@ -181,7 +182,7 @@ func (reg *registry) await(v int64) {
 		blockWaitTimer.UpdateSince(start)
 	case <-t.C:
 		blockWaitTimeout.Mark(1)
-		log.Warn("Timed out waiting for block", "block", v)
+		log.Debug("Timed out waiting for block", "block", v)
 	}
 	t.Stop()
 }

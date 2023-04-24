@@ -588,9 +588,9 @@ func collect[T any](obj interface{}) []T {
 	// Create a slice to store the results
 	results := []T{}
 	// Iterate over the fields of the object
-	for i := 0; i < val.NumField(); i++ {
+	for _, fieldInfo := range reflect.VisibleFields(val.Type()) {
 		// Get the field of the object
-		field := val.Field(i)
+		field := val.FieldByName(fieldInfo.Name)
 		// If the field is a pointer, dereference it
 		if field.Kind() == reflect.Ptr {
 		field = field.Elem()

@@ -589,6 +589,7 @@ func collect[T any](obj interface{}) []T {
 	results := []T{}
 	// Iterate over the fields of the object
 	for _, fieldInfo := range reflect.VisibleFields(val.Type()) {
+		if !fieldInfo.IsExported() { continue }
 		// Get the field of the object
 		field := val.FieldByName(fieldInfo.Name)
 		// If the field is a pointer, dereference it

@@ -8,6 +8,7 @@ import (
   "strconv"
   "time"
   "reflect"
+  "math/big"
   log "github.com/inconshreveable/log15"
 )
 
@@ -35,11 +36,24 @@ func (t *testService) EmptyMap() map[string]string {
 
 func (t *testService) BlockNumber(latest BlockNumber) string {
   return strconv.Itoa(int(latest))
+
+}
+func (t *testService) MathBig(b *big.Int) string {
+  return b.String()
 }
 
 func (t *testService) Delay(cctx *CallContext) bool {
 	cctx.Await(cctx.Latest)
 	return true
+}
+
+type istruct struct {
+	a int
+	B int
+}
+
+func (t *testService) StructInput(i istruct) istruct {
+	return i
 }
 
 func (t *testService) FooBar(foo string, bar int) (string, error) {
@@ -149,6 +163,13 @@ func TestCallBn(t *testing.T) {
     t.Errorf("Call time was too fast: %v", d)
   }
 	if err3 != nil { t.Errorf(err3.Error()) }
+	result, err4, _ := registry.Call(context.Background(), "test_structInput", []json.RawMessage{json.RawMessage(`{"B": 3}`)}, nil, 52)
+	if result.(istruct).B != 3 {
+		t.Errorf("Unexpected value")
+	}
+	if err4 != nil { t.Errorf(err4.Error()) }
+	_, err5, _ := registry.Call(context.Background(), "test_mathBig", []json.RawMessage{json.RawMessage(`5`)}, nil, 52)
+	if err5 != nil { t.Errorf(err5.Error()) }
 }
 
 func TestCollectItem(t *testing.T) {

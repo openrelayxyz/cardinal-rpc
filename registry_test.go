@@ -43,8 +43,7 @@ func (t *testService) MathBig(b *big.Int) string {
 }
 
 func (t *testService) Delay(cctx *CallContext) bool {
-	cctx.Await(cctx.Latest)
-	return true
+	return cctx.Await(cctx.Latest)
 }
 
 type istruct struct {
@@ -128,23 +127,26 @@ func TestCallComplex(t *testing.T) {
 func TestCallBn(t *testing.T) {
   registry := NewRegistry(16)
   registry.Register("test", &testService{})
+  log.Debug("test_blockNumber", "param", "latest", "latest", 3)
   out, err, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"latest"`)}, nil, 3)
   if err != nil { t.Errorf(err.Error()) }
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
-  if v != "3" { t.Errorf("Unexpected output") }
+  if v != "3" { t.Errorf("Unexpected output: %v", v) }
   hf := make(chan int64)
   registry.RegisterHeightFeed(hf)
+  hf <- 50
+  time.Sleep(20 * time.Millisecond)
   start := time.Now()
-  hf <- 3
   go func() {
     time.Sleep(20 * time.Millisecond)
     hf <- 51
   }()
+  log.Debug("test_blockNumber", "param", "0x33", "latest", 3)
   out2, err2, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"0x33"`)}, nil, 3)
   if d := time.Since(start); d > 400 * time.Millisecond {
     t.Errorf("Call time took too long: %v", d)
-  } else if d < 20 {
+  } else if d < 20 * time.Millisecond {
     t.Errorf("Call time was too fast: %v", d)
   }
   if err2 != nil { t.Errorf(err2.Error()) }
@@ -156,13 +158,17 @@ func TestCallBn(t *testing.T) {
     time.Sleep(20 * time.Millisecond)
     hf <- 55
   }()
-	_, err3, _ := registry.Call(context.Background(), "test_delay", []json.RawMessage{}, nil, 52)
+	log.Debug("test_delay", "latest", 52)
+	v3, err3, _ := registry.Call(context.Background(), "test_delay", []json.RawMessage{}, nil, 52)
 	if d := time.Since(start); d > 400 * time.Millisecond {
     t.Errorf("Call time took too long: %v", d)
-  } else if d < 20 {
+  } else if d < 20 * time.Millisecond {
     t.Errorf("Call time was too fast: %v", d)
   }
 	if err3 != nil { t.Errorf(err3.Error()) }
+	if v3 != true {
+		t.Errorf("Unexpected value: %v", v3)
+	}
 	result, err4, _ := registry.Call(context.Background(), "test_structInput", []json.RawMessage{json.RawMessage(`{"B": 3}`)}, nil, 52)
 	if result.(istruct).B != 3 {
 		t.Errorf("Unexpected value")
@@ -170,6 +176,11 @@ func TestCallBn(t *testing.T) {
 	if err4 != nil { t.Errorf(err4.Error()) }
 	_, err5, _ := registry.Call(context.Background(), "test_mathBig", []json.RawMessage{json.RawMessage(`5`)}, nil, 52)
 	if err5 != nil { t.Errorf(err5.Error()) }
+	out6, err6, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"latest"`)}, nil, 60)
+  if err != nil { t.Errorf(err6.Error()) }
+  v6, ok := out6.(string)
+  if !ok { t.Errorf("Expected type") }
+  if v6 != "-1" { t.Errorf("Unexpected output: %v", v6) } // 60 is far enough in the future we don't expect that to resolve
 }
 
 func TestCollectItem(t *testing.T) {

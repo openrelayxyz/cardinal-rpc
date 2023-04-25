@@ -8,7 +8,7 @@ import (
   "sync"
   "sync/atomic"
   "github.com/openrelayxyz/cardinal-types/hexutil"
-  log "github.com/inconshreveable/log15"
+  // log "github.com/inconshreveable/log15"
   "strings"
 )
 
@@ -88,7 +88,7 @@ type CallContext struct {
   meta *CallMetadata
   data     map[string]interface{}
   Latest int64
-  Await  func(int64)
+  Await  func(int64) bool
 }
 
 func (c *CallContext) Context() context.Context {
@@ -114,25 +114,34 @@ func (cm *CallContext) Get(key string) (interface{}, bool) {
 
 type latestUnmarshaller struct {
   lock *sync.Mutex
+	latestList []*BlockNumber
+}
+
+func (lm *latestUnmarshaller) Add(b *BlockNumber) {
+	lm.latestList = append(lm.latestList, b)
+}
+
+func (lm *latestUnmarshaller) Resolve(await func(int64) bool, latest int64) {
+	ll := lm.latestList
+	lm.latestList = []*BlockNumber{}
+	lm.lock.Unlock()
+	if await(latest) {
+		for _, p := range ll {
+			*p = BlockNumber(latest)
+		}
+	}
 }
 
 var lm *latestUnmarshaller
 
 func init() {
-  lm = &latestUnmarshaller{lock: &sync.Mutex{}}
+  lm = &latestUnmarshaller{lock: &sync.Mutex{}, latestList: []*BlockNumber{}}
 }
 
-func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest int64) error {
+func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest int64, await func(int64) bool) error {
   if latest != -1 {
-    lm.lock.Lock()
-    ol := LatestBlockNumber
-    defer func() {
-      LatestBlockNumber = ol
-      log.Debug("Latest unset", "value", LatestBlockNumber)
-      lm.lock.Unlock()
-      }()
-      LatestBlockNumber = BlockNumber(latest)
-      log.Debug("Latest set", "value", LatestBlockNumber)
+		lm.lock.Lock()
+		defer lm.Resolve(await, latest)
   }
   return json.Unmarshal(data, value)
 }
@@ -140,7 +149,7 @@ func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest i
 
 type BlockNumber int64
 
-var (
+const (
   PendingBlockNumber  = BlockNumber(-2)
   LatestBlockNumber   = BlockNumber(-1)
   EarliestBlockNumber = BlockNumber(0)
@@ -154,7 +163,7 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
     *bn = EarliestBlockNumber
     return nil
   case "latest":
-    log.Debug("Setting latest parameter", "value", LatestBlockNumber)
+		lm.Add(bn)
     *bn = LatestBlockNumber
     return nil
   case "pending":

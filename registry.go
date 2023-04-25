@@ -165,8 +165,18 @@ func (reg *registry) RegisterHeightFeed(ch <-chan int64) {
 	}()
 }
 
-func (reg *registry) await(v int64) {
-	if v <= atomic.LoadInt64(reg.height) { return }
+func (reg *registry) await(v int64) bool {
+	// limit distance of a wait
+	height := atomic.LoadInt64(reg.height)
+	if v <= height  {
+		return true
+	}
+	if height == 0 {
+		return true
+	}
+	if v > height + 5 {
+		return false
+	} // We're not going to wait 5 blocks
 	reg.sleepFeedLock.RLock()
 	feed, ok := reg.sleepFeeds[v]
 	if !ok {
@@ -176,15 +186,17 @@ func (reg *registry) await(v int64) {
 	log.Debug("Waiting for block to become available", "number", v)
 	reg.sleepFeedLock.RUnlock()
 	t := time.NewTimer(reg.blockWaitDuration)
+	defer t.Stop()
 	start := time.Now()
 	select {
 	case <-feed:
 		blockWaitTimer.UpdateSince(start)
+		return true
 	case <-t.C:
 		blockWaitTimeout.Mark(1)
 		log.Debug("Timed out waiting for block", "block", v)
+		return false
 	}
-	t.Stop()
 }
 
 func (reg *registry) SetBlockWaitDuration(d time.Duration) {
@@ -417,7 +429,7 @@ func (reg *registry) parseArgs(cctx *CallContext, cb *callback, args []json.RawM
 			continue
 		}
 		arg := reflect.New(argType)
-		if err := lm.Unmarshal(args[i], arg.Interface(), cctx.Latest); err != nil {
+		if err := lm.Unmarshal(args[i], arg.Interface(), cctx.Latest, reg.await); err != nil {
 			return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error()))
 		}
 		argVals = append(argVals, arg.Elem())

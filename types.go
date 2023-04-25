@@ -172,3 +172,14 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
   *bn = BlockNumber(n)
   return nil
 }
+
+func (bn BlockNumber) MarshalJSON() ([]byte, error) {
+	switch bn {
+	case -2:
+		return []byte(`"pending"`), nil
+	case -1:
+		return []byte(`"latest"`), nil
+	default:
+		return json.Marshal(hexutil.Uint(bn))
+	}
+}

@@ -3,8 +3,13 @@ package rpc
 import (
   "encoding/json"
   "context"
+  "fmt"
+  "math"
+  "sync"
   "sync/atomic"
   "github.com/openrelayxyz/cardinal-types/hexutil"
+  // log "github.com/inconshreveable/log15"
+  "strings"
 )
 
 type Call struct {
@@ -82,6 +87,8 @@ type CallContext struct {
   ctx context.Context
   meta *CallMetadata
   data     map[string]interface{}
+  Latest int64
+  Await  func(int64) bool
 }
 
 func (c *CallContext) Context() context.Context {
@@ -102,4 +109,86 @@ func (cm *CallContext) Get(key string) (interface{}, bool) {
   if cm.data == nil { return nil, false }
   v, ok := cm.data[key]
   return v, ok
+}
+
+
+type latestUnmarshaller struct {
+  lock *sync.Mutex
+	latestList []*BlockNumber
+}
+
+func (lm *latestUnmarshaller) Add(b *BlockNumber) {
+	lm.latestList = append(lm.latestList, b)
+}
+
+func (lm *latestUnmarshaller) Resolve(await func(int64) bool, latest int64) {
+	ll := lm.latestList
+	lm.latestList = []*BlockNumber{}
+	lm.lock.Unlock()
+	if len(ll) > 0 && await(latest) {
+		for _, p := range ll {
+			*p = BlockNumber(latest)
+		}
+	}
+}
+
+var lm *latestUnmarshaller
+
+func init() {
+  lm = &latestUnmarshaller{lock: &sync.Mutex{}, latestList: []*BlockNumber{}}
+}
+
+func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest int64, await func(int64) bool) error {
+  if latest != -1 {
+		lm.lock.Lock()
+		defer lm.Resolve(await, latest)
+  }
+  return json.Unmarshal(data, value)
+}
+
+
+type BlockNumber int64
+
+const (
+  PendingBlockNumber  = BlockNumber(-2)
+  LatestBlockNumber   = BlockNumber(-1)
+  EarliestBlockNumber = BlockNumber(0)
+)
+
+func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
+  v := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(string(data)), `"`), `"`)
+
+  switch v {
+  case "earliest":
+    *bn = EarliestBlockNumber
+    return nil
+  case "latest":
+		lm.Add(bn)
+    *bn = LatestBlockNumber
+    return nil
+  case "pending":
+    *bn = PendingBlockNumber
+    return nil
+  }
+
+  n, err := hexutil.DecodeUint64(v)
+  if err != nil {
+    return err
+  }
+  if n > math.MaxInt64 {
+    return fmt.Errorf("block number larger than int64")
+  }
+  *bn = BlockNumber(n)
+  return nil
+}
+
+func (bn BlockNumber) MarshalJSON() ([]byte, error) {
+	switch bn {
+	case -2:
+		return []byte(`"pending"`), nil
+	case -1:
+		return []byte(`"latest"`), nil
+	default:
+		return json.Marshal(hexutil.Uint(bn))
+	}
 }

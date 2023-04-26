@@ -5,7 +5,6 @@ import (
   "encoding/json"
   "fmt"
   "github.com/openrelayxyz/cardinal-rpc"
-  "github.com/openrelayxyz/cardinal-types/metrics"
   "os"
   "os/signal"
   "syscall"
@@ -14,9 +13,6 @@ import (
   log "github.com/inconshreveable/log15"
 )
 
-var (
-  concurrencyMeter = metrics.NewMajorHistogram("/rpc/concurrency")
-)
 
 type TransportManager struct{
   transports   []Transport
@@ -30,8 +26,7 @@ type TransportManager struct{
 func NewTransportManager(concurrency int) *TransportManager {
   return &TransportManager{
     transports: []Transport{},
-    semaphore:  make(chan struct{}, concurrency),
-    registry: rpc.NewRegistry(),
+    registry: rpc.NewRegistry(concurrency),
     healthChecks: []rpc.HealthCheck{},
     shutdown: false,
   }
@@ -45,8 +40,16 @@ func (tm *TransportManager) RegisterMiddleware(item rpc.Middleware) {
   tm.registry.RegisterMiddleware(item)
 }
 
+func (tm *TransportManager) RegisterHeightFeed(ch <-chan int64) {
+	tm.registry.RegisterHeightFeed(ch)
+}
+
 func (tm *TransportManager) RegisterHealthCheck(hc rpc.HealthCheck) {
   tm.healthChecks = append(tm.healthChecks, hc)
+}
+
+func (tm *TransportManager) SetBlockWaitDuration(d time.Duration) {
+	tm.registry.SetBlockWaitDuration(d)
 }
 
 func (tm *TransportManager) OnMissing(fn func(*rpc.CallContext, string, []json.RawMessage) (interface{}, *rpc.RPCError, *rpc.CallMetadata)) {
@@ -54,11 +57,11 @@ func (tm *TransportManager) OnMissing(fn func(*rpc.CallContext, string, []json.R
 }
 
 func (tm *TransportManager) AddHTTPServer(port int64) {
-  tm.transports = append(tm.transports, NewHTTPTransport(port, tm.semaphore, tm.registry))
+  tm.transports = append(tm.transports, NewHTTPTransport(port, tm.registry))
 }
 
 func (tm *TransportManager) AddWSServer(port int64) {
-  tm.transports = append(tm.transports, NewWSTransport(port, tm.semaphore, tm.registry))
+  tm.transports = append(tm.transports, NewWSTransport(port, tm.registry))
 }
 
 func (tm *TransportManager) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
@@ -94,13 +97,6 @@ func (tm *TransportManager) Run(hcport int64) error {
   for _, t := range tm.transports {
     t.Start(failure)
   }
-  go func() {
-    t := time.NewTicker(time.Second)
-    defer t.Stop()
-    for range t.C {
-      concurrencyMeter.Update(int64(len(tm.semaphore)))
-    }
-  }()
   if hcport > 0 {
     mux := http.NewServeMux()
     mux.HandleFunc("/", tm.handleHealthCheck)

@@ -1,6 +1,6 @@
 module github.com/openrelayxyz/cardinal-rpc
 
-go 1.16
+go 1.18
 
 require (
 	github.com/NYTimes/gziphandler v1.1.1

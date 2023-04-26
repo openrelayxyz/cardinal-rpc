@@ -13,28 +13,35 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	cmeter     = metrics.NewMajorMeter("/rpc/compute")
 	calltimer  = metrics.NewMajorTimer("/rpc/timer")
+	blockWaitTimer  = metrics.NewMajorTimer("/rpc/blockwait")
+	blockWaitTimeout  = metrics.NewMajorMeter("/rpc/blockwait")
 	crashMeter = metrics.NewMajorCounter("/rpc/crash")
+	concurrencyMeter = metrics.NewMajorHistogram("/rpc/concurrency")
 )
 
 type RegistryCallable interface {
-	Call(ctx context.Context, method string, args []json.RawMessage, output chan interface{}) (interface{}, *RPCError, *CallMetadata)
+	Call(ctx context.Context, method string, args []json.RawMessage, output chan interface{}, latestNumber int64) (interface{}, *RPCError, *CallMetadata)
 }
 
 type Registry interface {
 	RegistryCallable
 	Register(namespace string, service interface{})
 	RegisterMiddleware(Middleware)
+	RegisterHeightFeed(<-chan int64)
+	SetBlockWaitDuration(time.Duration)
 	OnMissing(func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata))
 	Disconnect(context.Context)
 }
 
-func NewRegistry() Registry {
+func NewRegistry(concurrency int) Registry {
 	reg := &registry{
 		callbacks: make(map[string]*callback),
 		subscriptions: make(map[string]*callback),
@@ -42,7 +49,19 @@ func NewRegistry() Registry {
 		onMissing:handleMissing,
 		subscriptionCounter: make(map[context.Context]hexutil.Uint64),
 		subscriptionCancels: make(map[context.Context]map[hexutil.Uint64]func()),
+		semaphore: make(chan struct{}, concurrency),
+		sleepFeeds: make(map[int64]chan struct{}),
+		sleepFeedLock: &sync.Mutex{},
+		blockWaitDuration: 500 * time.Millisecond,
+		height: new(int64),
 	}
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for range t.C {
+		  concurrencyMeter.Update(int64(len(reg.semaphore)))
+		}
+	}()
 	reg.Register("rpc", &registryApi{reg})
 	return reg
 }
@@ -54,6 +73,11 @@ type registry struct {
 	onMissing  func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata)
 	subscriptionCounter map[context.Context]hexutil.Uint64
 	subscriptionCancels map[context.Context]map[hexutil.Uint64]func()
+	semaphore chan struct{}
+	height *int64
+	sleepFeeds map[int64]chan struct{}
+	sleepFeedLock *sync.Mutex
+	blockWaitDuration time.Duration
 }
 
 type registryApi struct {
@@ -119,6 +143,64 @@ var (
 
 func (reg *registry) RegisterMiddleware(m Middleware) {
 	reg.middleware = append(reg.middleware, m)
+}
+
+func (reg *registry) RegisterHeightFeed(ch <-chan int64) {
+	go func() {
+		var lastValue int64
+		for v := range ch {
+			atomic.StoreInt64(reg.height, v)
+			if lastValue == 0 {
+				lastValue = v
+			}
+			reg.sleepFeedLock.Lock()
+			for ; lastValue <= v; lastValue++ {
+				if feed, ok := reg.sleepFeeds[lastValue]; ok {
+					close(feed)
+					delete(reg.sleepFeeds, lastValue)
+				}
+			}
+			reg.sleepFeedLock.Unlock()
+		}
+	}()
+}
+
+func (reg *registry) await(v int64) bool {
+	// limit distance of a wait
+	height := atomic.LoadInt64(reg.height)
+	if v <= height  {
+		return true
+	}
+	if height == 0 {
+		return true
+	}
+	if v > height + 5 {
+		return false
+	} // We're not going to wait 5 blocks
+	reg.sleepFeedLock.Lock()
+	feed, ok := reg.sleepFeeds[v]
+	if !ok {
+		feed = make(chan struct{})
+		reg.sleepFeeds[v] = feed
+	}
+	log.Debug("Waiting for block to become available", "number", v)
+	reg.sleepFeedLock.Unlock()
+	t := time.NewTimer(reg.blockWaitDuration)
+	defer t.Stop()
+	start := time.Now()
+	select {
+	case <-feed:
+		blockWaitTimer.UpdateSince(start)
+		return true
+	case <-t.C:
+		blockWaitTimeout.Mark(1)
+		log.Debug("Timed out waiting for block", "block", v)
+		return false
+	}
+}
+
+func (reg *registry) SetBlockWaitDuration(d time.Duration) {
+	reg.blockWaitDuration = d
 }
 
 func (reg *registry) Register(namespace string, service interface{}) {
@@ -269,9 +351,9 @@ func (reg *registry) OnMissing(fn func(*CallContext, string, []json.RawMessage) 
 
 }
 
-func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage, outputs chan interface{}) (res interface{}, errRes *RPCError, cm *CallMetadata) {
+func (reg *registry) Call(ctx context.Context, method string, args []json.RawMessage, outputs chan interface{}, latestNumber int64) (res interface{}, errRes *RPCError, cm *CallMetadata) {
 	start := time.Now()
-	cctx := &CallContext{ctx, &CallMetadata{}, nil}
+	cctx := &CallContext{ctx, &CallMetadata{}, nil, latestNumber, reg.await}
 	defer func() {
 		calltimer.UpdateSince(start)
 		if compute := cctx.Metadata().Compute; compute != nil {
@@ -331,6 +413,7 @@ func (reg *registry) parseArgs(cctx *CallContext, cb *callback, args []json.RawM
 	} else if cb.takesCallContext {
 		argVals = append(argVals, reflect.ValueOf(cctx))
 	}
+	maxBn := BlockNumber(0)
 	for i, argType := range cb.argTypes {
 		t := argType
 		derefs := 0
@@ -346,11 +429,19 @@ func (reg *registry) parseArgs(cctx *CallContext, cb *callback, args []json.RawM
 			continue
 		}
 		arg := reflect.New(argType)
-		if err := json.Unmarshal(args[i], arg.Interface()); err != nil {
+		if err := lm.Unmarshal(args[i], arg.Interface(), cctx.Latest, reg.await); err != nil {
 			return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error()))
 		}
 		argVals = append(argVals, arg.Elem())
+		if atomic.LoadInt64(reg.height) > 0 {
+			for _, v := range collect[BlockNumber](arg.Interface()) {
+				if v > maxBn {
+					maxBn = v
+				}
+			}
+		}
 	}
+	reg.await(int64(maxBn))
 	return argVals, nil
 }
 
@@ -448,7 +539,9 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 	if err != nil {
 		return nil, err, cctx.meta
 	}
+	reg.semaphore <- struct{}{}
 	out := cb.fn.Call(argVals)
+	<-reg.semaphore
 	if cb.metaIndex > -1 {
 		var ok bool
 		cm, ok = out[cb.metaIndex].Interface().(*CallMetadata)
@@ -482,4 +575,49 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 
 func rpcName(namespace, method string) string {
 	return fmt.Sprintf("%v_%v%v", strings.ToLower(namespace), strings.ToLower(method[:1]), method[1:])
+}
+
+func collect[T any](obj interface{}) []T {
+	targetType := reflect.TypeOf((*T)(nil)).Elem()
+	// Check if the object is nil
+	if obj == nil {
+	  return nil
+	}
+	// Get the value of the object
+	val := reflect.ValueOf(obj)
+
+	if val.Type() == targetType {
+		return []T{val.Interface().(T)}
+	}
+
+	if val.Kind() == reflect.Ptr {
+		return collect[T](val.Elem().Interface())
+	}
+	// If the object is not a struct, return nil
+	if val.Kind() != reflect.Struct {
+	  return nil
+	}
+	// Create a slice to store the results
+	results := []T{}
+	// Iterate over the fields of the object
+	for _, fieldInfo := range reflect.VisibleFields(val.Type()) {
+		if !fieldInfo.IsExported() { continue }
+		// Get the field of the object
+		field := val.FieldByName(fieldInfo.Name)
+		// If the field is a pointer, dereference it
+		if field.Kind() == reflect.Ptr {
+		field = field.Elem()
+		}
+		// If the field is of the target type, add it to the results
+		if field.IsValid() && !field.IsZero() {
+			if field.Type() == targetType {
+			results = append(results, field.Interface().(T))
+			} else {
+				// Recursively walk the field
+				results = append(results, collect[T](field.Interface())...)
+			}
+		}
+	}
+	// Return the results
+	return results
 }

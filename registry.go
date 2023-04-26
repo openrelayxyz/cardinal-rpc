@@ -51,7 +51,7 @@ func NewRegistry(concurrency int) Registry {
 		subscriptionCancels: make(map[context.Context]map[hexutil.Uint64]func()),
 		semaphore: make(chan struct{}, concurrency),
 		sleepFeeds: make(map[int64]chan struct{}),
-		sleepFeedLock: &sync.RWMutex{},
+		sleepFeedLock: &sync.Mutex{},
 		blockWaitDuration: 500 * time.Millisecond,
 		height: new(int64),
 	}
@@ -76,7 +76,7 @@ type registry struct {
 	semaphore chan struct{}
 	height *int64
 	sleepFeeds map[int64]chan struct{}
-	sleepFeedLock *sync.RWMutex
+	sleepFeedLock *sync.Mutex
 	blockWaitDuration time.Duration
 }
 
@@ -177,14 +177,14 @@ func (reg *registry) await(v int64) bool {
 	if v > height + 5 {
 		return false
 	} // We're not going to wait 5 blocks
-	reg.sleepFeedLock.RLock()
+	reg.sleepFeedLock.Lock()
 	feed, ok := reg.sleepFeeds[v]
 	if !ok {
 		feed = make(chan struct{})
 		reg.sleepFeeds[v] = feed
 	}
 	log.Debug("Waiting for block to become available", "number", v)
-	reg.sleepFeedLock.RUnlock()
+	reg.sleepFeedLock.Unlock()
 	t := time.NewTimer(reg.blockWaitDuration)
 	defer t.Stop()
 	start := time.Now()

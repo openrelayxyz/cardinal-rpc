@@ -125,7 +125,7 @@ func (lm *latestUnmarshaller) Resolve(await func(int64) bool, latest int64) {
 	ll := lm.latestList
 	lm.latestList = []*BlockNumber{}
 	lm.lock.Unlock()
-	if await(latest) {
+	if len(ll) > 0 && await(latest) {
 		for _, p := range ll {
 			*p = BlockNumber(latest)
 		}

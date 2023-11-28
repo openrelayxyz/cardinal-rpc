@@ -524,6 +524,7 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 			cb.cmeter.Mark(compute.Int64())
 		}
 	}(time.Now())
+	var holdsem bool
 	defer func() {
 		if err := recover(); err != nil {
 			const size = 64 << 10
@@ -533,6 +534,9 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 			log.Error("RPC method " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
 			errRes = NewRPCError(-1, "method handler crashed")
 			cm = cctx.meta
+			if holdsem {
+				<-reg.semaphore
+			}
 		}
 	}()
 	argVals, err := reg.parseArgs(cctx, cb, args)
@@ -540,8 +544,10 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 		return nil, err, cctx.meta
 	}
 	reg.semaphore <- struct{}{}
+	holdsem = true
 	out := cb.fn.Call(argVals)
 	<-reg.semaphore
+	holdsem = false
 	if cb.metaIndex > -1 {
 		var ok bool
 		cm, ok = out[cb.metaIndex].Interface().(*CallMetadata)

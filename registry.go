@@ -36,6 +36,7 @@ type Registry interface {
 	Register(namespace string, service interface{})
 	RegisterMiddleware(Middleware)
 	RegisterHeightFeed(<-chan int64)
+	RegisterHeightRecordFeed(<-chan *HeightRecord)
 	SetBlockWaitDuration(time.Duration)
 	OnMissing(func(*CallContext, string, []json.RawMessage) (interface{}, *RPCError, *CallMetadata))
 	Disconnect(context.Context)
@@ -54,7 +55,11 @@ func NewRegistry(concurrency int) Registry {
 		sleepFeedLock: &sync.Mutex{},
 		blockWaitDuration: 500 * time.Millisecond,
 		height: new(int64),
+		safe: new(int64),
+		finalized: new(int64),
 	}
+	atomic.StoreInt64(reg.safe, -3)
+	atomic.StoreInt64(reg.finalized, -4)
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -75,6 +80,8 @@ type registry struct {
 	subscriptionCancels map[context.Context]map[hexutil.Uint64]func()
 	semaphore chan struct{}
 	height *int64
+	safe *int64
+	finalized *int64
 	sleepFeeds map[int64]chan struct{}
 	sleepFeedLock *sync.Mutex
 	blockWaitDuration time.Duration
@@ -145,7 +152,33 @@ func (reg *registry) RegisterMiddleware(m Middleware) {
 	reg.middleware = append(reg.middleware, m)
 }
 
+func (reg *registry) RegisterHeightRecordFeed(ch <-chan *HeightRecord) {
+	go func() {
+		var lastValue int64
+		for v := range ch {
+			atomic.StoreInt64(reg.height, v.Latest)
+			if v.Safe != nil && *v.Safe > *reg.safe {
+				atomic.StoreInt64(reg.safe, *v.Safe)
+			}
+			if v.Finalized != nil && *v.Finalized > *reg.finalized {
+				atomic.StoreInt64(reg.finalized, *v.Finalized)
+			}
+			if lastValue == 0 {
+				lastValue = v.Latest
+			}
+			reg.sleepFeedLock.Lock()
+			for ; lastValue <= v.Latest; lastValue++ {
+				if feed, ok := reg.sleepFeeds[lastValue]; ok {
+					close(feed)
+					delete(reg.sleepFeeds, lastValue)
+				}
+			}
+			reg.sleepFeedLock.Unlock()
+		}
+	}()
+}
 func (reg *registry) RegisterHeightFeed(ch <-chan int64) {
+	log.Warn("rpc.RegisterHeightFeed is deprecated. Please update to rpc.RegisterHeightRecordFeed")
 	go func() {
 		var lastValue int64
 		for v := range ch {
@@ -429,7 +462,7 @@ func (reg *registry) parseArgs(cctx *CallContext, cb *callback, args []json.RawM
 			continue
 		}
 		arg := reflect.New(argType)
-		if err := lm.Unmarshal(args[i], arg.Interface(), cctx.Latest, reg.await); err != nil {
+		if err := lm.Unmarshal(args[i], arg.Interface(), *reg.finalized, *reg.safe, cctx.Latest, reg.await); err != nil {
 			return nil, NewRPCError(-32602, fmt.Sprintf("invalid argument %v: %v", i, err.Error()))
 		}
 		argVals = append(argVals, arg.Elem())

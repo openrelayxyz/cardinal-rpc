@@ -133,14 +133,14 @@ func TestCallBn(t *testing.T) {
   v, ok := out.(string)
   if !ok { t.Errorf("Expected type") }
   if v != "3" { t.Errorf("Unexpected output: %v", v) }
-  hf := make(chan int64)
-  registry.RegisterHeightFeed(hf)
-  hf <- 50
+  hf := make(chan *HeightRecord)
+  registry.RegisterHeightRecordFeed(hf)
+  hf <- &HeightRecord{Latest: 50}
   time.Sleep(20 * time.Millisecond)
   start := time.Now()
   go func() {
     time.Sleep(20 * time.Millisecond)
-    hf <- 51
+    hf <- &HeightRecord{Latest: 51}
   }()
   log.Debug("test_blockNumber", "param", "0x33", "latest", 3)
   out2, err2, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"0x33"`)}, nil, 3)
@@ -156,7 +156,13 @@ func TestCallBn(t *testing.T) {
 	start = time.Now()
 	go func() {
     time.Sleep(20 * time.Millisecond)
-    hf <- 55
+    hr := &HeightRecord{
+      Latest: 55,
+      Safe: new(int64),
+      Finalized: new(int64),
+    }
+    *hr.Safe = 20
+    hf <- hr
   }()
 	log.Debug("test_delay", "latest", 52)
 	v3, err3, _ := registry.Call(context.Background(), "test_delay", []json.RawMessage{}, nil, 52)
@@ -181,6 +187,12 @@ func TestCallBn(t *testing.T) {
   v6, ok := out6.(string)
   if !ok { t.Errorf("Expected type") }
   if v6 != "-1" { t.Errorf("Unexpected output: %v", v6) } // 60 is far enough in the future we don't expect that to resolve
+
+	out7, err7, _ := registry.Call(context.Background(), "test_blockNumber", []json.RawMessage{json.RawMessage(`"safe"`)}, nil, 56)
+  if err != nil { t.Errorf(err7.Error()) }
+  v7, ok := out7.(string)
+  if !ok { t.Errorf("Expected type") }
+  if v7 != "20" { t.Errorf("Unexpected output: %v", v7) }
 }
 
 func TestCollectItem(t *testing.T) {

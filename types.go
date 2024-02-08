@@ -122,20 +122,39 @@ func (cm *CallContext) Get(key string) (interface{}, bool) {
 type latestUnmarshaller struct {
   lock *sync.Mutex
 	latestList []*BlockNumber
+	safeList []*BlockNumber
+	finalizedList []*BlockNumber
 }
 
 func (lm *latestUnmarshaller) Add(b *BlockNumber) {
 	lm.latestList = append(lm.latestList, b)
 }
+func (lm *latestUnmarshaller) AddFinalized(b *BlockNumber) {
+	lm.finalizedList = append(lm.finalizedList, b)
+}
+func (lm *latestUnmarshaller) AddSafe(b *BlockNumber) {
+	lm.safeList = append(lm.safeList, b)
+}
 
-func (lm *latestUnmarshaller) Resolve(await func(int64) bool, latest int64) {
+func (lm *latestUnmarshaller) Resolve(await func(int64) bool, finalized, safe, latest int64) {
 	ll := lm.latestList
 	lm.latestList = []*BlockNumber{}
+	fl := lm.finalizedList
+	lm.finalizedList = []*BlockNumber{}
+	sl := lm.safeList
+	lm.safeList = []*BlockNumber{}
 	lm.lock.Unlock()
 	if len(ll) > 0 && await(latest) {
 		for _, p := range ll {
 			*p = BlockNumber(latest)
 		}
+	}
+	// We don't need to await for safe or finalized, since those are older block numbers anyway.
+	for _, p := range fl {
+		*p = BlockNumber(finalized)
+	}
+	for _, p := range sl {
+		*p = BlockNumber(safe)
 	}
 }
 
@@ -145,10 +164,10 @@ func init() {
   lm = &latestUnmarshaller{lock: &sync.Mutex{}, latestList: []*BlockNumber{}}
 }
 
-func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest int64, await func(int64) bool) error {
+func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, finalized, safe, latest int64, await func(int64) bool) error {
   if latest != -1 {
 		lm.lock.Lock()
-		defer lm.Resolve(await, latest)
+		defer lm.Resolve(await, finalized, safe, latest)
   }
   return json.Unmarshal(data, value)
 }
@@ -157,9 +176,11 @@ func (lm *latestUnmarshaller) Unmarshal(data []byte, value interface{}, latest i
 type BlockNumber int64
 
 const (
-  PendingBlockNumber  = BlockNumber(-2)
-  LatestBlockNumber   = BlockNumber(-1)
-  EarliestBlockNumber = BlockNumber(0)
+  FinalizedBlockNumber = BlockNumber(-4)
+  SafeBlockNumber      = BlockNumber(-3)
+  PendingBlockNumber   = BlockNumber(-2)
+  LatestBlockNumber    = BlockNumber(-1)
+  EarliestBlockNumber  = BlockNumber(0)
 )
 
 func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
@@ -176,6 +197,14 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
   case "pending":
     *bn = PendingBlockNumber
     return nil
+	case "safe":
+		lm.AddSafe(bn)
+		*bn = SafeBlockNumber
+		return nil
+	case "finalized":
+		lm.AddFinalized(bn)
+		*bn = FinalizedBlockNumber
+		return nil
   }
 
   n, err := hexutil.DecodeUint64(v)
@@ -191,6 +220,10 @@ func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
 
 func (bn BlockNumber) MarshalJSON() ([]byte, error) {
 	switch bn {
+	case -4:
+		return []byte(`"finalized"`), nil
+	case -3:
+		return []byte(`"safe"`), nil
 	case -2:
 		return []byte(`"pending"`), nil
 	case -1:
@@ -198,4 +231,10 @@ func (bn BlockNumber) MarshalJSON() ([]byte, error) {
 	default:
 		return json.Marshal(hexutil.Uint(bn))
 	}
+}
+
+type HeightRecord struct {
+	Latest    int64
+	Safe      *int64
+	Finalized *int64
 }

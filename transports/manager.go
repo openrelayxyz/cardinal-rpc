@@ -40,8 +40,15 @@ func (tm *TransportManager) RegisterMiddleware(item rpc.Middleware) {
   tm.registry.RegisterMiddleware(item)
 }
 
-func (tm *TransportManager) RegisterHeightFeed(ch <-chan int64) {
-	tm.registry.RegisterHeightFeed(ch)
+func (tm *TransportManager) RegisterHeightFeed(ch interface{}) {
+	switch v := ch.(type) {
+	case chan int64:
+		tm.registry.RegisterHeightFeed(v)
+	case chan *rpc.HeightRecord:
+		tm.registry.RegisterHeightRecordFeed(v)
+	default:
+		log.Error("Height feed must be one of (chan int64) or (chan *rpc.HeightRecord). Height feed not registered!")
+	}
 }
 
 func (tm *TransportManager) RegisterHealthCheck(hc rpc.HealthCheck) {

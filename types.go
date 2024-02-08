@@ -91,6 +91,14 @@ type CallContext struct {
   Await  func(int64) bool
 }
 
+func NewContext(cx context.Context) *CallContext {
+  return &CallContext{
+    ctx: cx,
+    meta: &CallMetadata{},
+    data: make(map[string]interface{}),
+  }
+}
+
 func (c *CallContext) Context() context.Context {
   return c.ctx
 }
@@ -98,7 +106,6 @@ func (c *CallContext) Context() context.Context {
 func (c *CallContext) Metadata() *CallMetadata {
   return c.meta
 }
-
 
 func (cm *CallContext) Set(key string, value interface{}) {
   if cm.data == nil { cm.data = make(map[string]interface{}) }

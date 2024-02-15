@@ -630,6 +630,9 @@ func collect[T any](obj interface{}) []T {
 	}
 
 	if val.Kind() == reflect.Ptr {
+		if !val.Elem().IsValid() || val.Elem().IsZero() {
+			return nil
+		}
 		return collect[T](val.Elem().Interface())
 	}
 	// If the object is not a struct, return nil

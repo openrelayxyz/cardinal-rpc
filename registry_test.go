@@ -42,6 +42,14 @@ func (t *testService) MathBig(b *big.Int) string {
   return b.String()
 }
 
+func (t *testService) OptionalInt(a int, b *int) int {
+	if b == nil {
+		return a
+	} else {
+		return a + *b
+	}
+}
+
 func (t *testService) Delay(cctx *CallContext) bool {
 	return cctx.Await(cctx.Latest)
 }
@@ -193,6 +201,18 @@ func TestCallBn(t *testing.T) {
   v7, ok := out7.(string)
   if !ok { t.Errorf("Expected type") }
   if v7 != "20" { t.Errorf("Unexpected output: %v", v7) }
+
+	if _, err, _ := registry.Call(context.Background(), "test_optionalInt", []json.RawMessage{json.RawMessage(`1`)}, nil, 56); err != nil {
+		t.Errorf(err.Error())
+	}
+}
+
+func TestCollectNilItem(t *testing.T) {
+	var n *int
+	x := collect[BlockNumber](n)
+  if len(x) != 0 {
+    t.Errorf("Unexpected count")
+  }
 }
 
 func TestCollectItem(t *testing.T) {

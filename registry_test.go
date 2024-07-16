@@ -62,7 +62,7 @@ func (t *testService) FooBar(foo string, bar int) (string, error) {
   return fmt.Sprintf("Hello World %v %v", foo, bar), nil
 }
 
-func (t *testService) Panic() (error) {
+func (t *testService) Panic(a string, b int) (error) {
   panic("Oh no!")
 }
 
@@ -267,7 +267,7 @@ func TestCallErrors(t *testing.T) {
 func TestPanic(t *testing.T) {
   registry := NewRegistry(16)
   registry.Register("test", &testService{})
-  _, err, _ := registry.Call(context.Background(), "test_panic", []json.RawMessage{}, nil, -1)
+  _, err, _ := registry.Call(context.Background(), "test_panic", []json.RawMessage{[]byte(`"foo"`), []byte("3")}, nil, -1)
   if err == nil { t.Errorf("Expected error, got none") }
   log.Info("The above stack trace is not indicative of a problem. We're testing that panics get handled properly, and part of that is logging the panic.")
 }

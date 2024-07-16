@@ -145,16 +145,22 @@ func (lm *latestUnmarshaller) Resolve(await func(int64) bool, finalized, safe, l
 	lm.safeList = []*BlockNumber{}
 	lm.lock.Unlock()
 	if len(ll) > 0 && await(latest) {
-		for _, p := range ll {
-			*p = BlockNumber(latest)
+		for _, p := range ll {	
+			if p != nil {
+				*p = BlockNumber(latest)
+			}
 		}
 	}
 	// We don't need to await for safe or finalized, since those are older block numbers anyway.
 	for _, p := range fl {
-		*p = BlockNumber(finalized)
+		if p != nil {
+			*p = BlockNumber(finalized)
+		}
 	}
 	for _, p := range sl {
-		*p = BlockNumber(safe)
+		if p != nil {
+			*p = BlockNumber(safe)
+		}
 	}
 }
 

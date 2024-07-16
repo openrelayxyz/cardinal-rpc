@@ -546,6 +546,14 @@ func (reg *registry) subscribe(cctx *CallContext, method string, args []json.Raw
 	return subid, nil, cctx.meta
 }
 
+func fmtArgs(args []json.RawMessage) string {
+	argStrings := make([]string, len(args))
+	for i, arg := range args {
+		argStrings[i] = string(arg)
+	}
+	return strings.Join(argStrings, ", ")
+}
+
 func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessage) (res interface{}, errRes *RPCError, cm *CallMetadata) {
 	cb, ok := reg.callbacks[method]
 	if !ok {
@@ -564,7 +572,7 @@ func (reg *registry) call(cctx *CallContext, method string, args []json.RawMessa
 			buf := make([]byte, size)
 			buf = buf[:runtime.Stack(buf, false)]
 			crashMeter.Inc(1)
-			log.Error("RPC method " + method + " crashed: " + fmt.Sprintf("%v\n%s", err, buf))
+			log.Error("RPC method " + method + "("+ fmtArgs(args) +") crashed: " + fmt.Sprintf("%v\n%s", err, buf))
 			errRes = NewRPCError(-1, "method handler crashed")
 			cm = cctx.meta
 			if holdsem {
